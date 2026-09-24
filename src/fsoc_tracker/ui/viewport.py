@@ -35,7 +35,7 @@ class CameraView(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
 
-    def set_frame(self, frame_gray, detection=None, estimate=None, world_camera=None, show_overlays=True, meta=None):
+    def set_frame(self, frame_gray, detection=None, estimate=None, world_camera=None, show_overlays=True, meta=None, centre_offset=None):
         if frame_gray is None:
             return
         h, w = frame_gray.shape[:2]
@@ -43,6 +43,8 @@ class CameraView(QWidget):
         self._detection = detection
         self._estimate = estimate
         self._meta = meta or {}
+        # Video centre calibration: offset in pixels from frame centre (for videos where principal point != geometric centre)
+        self._centre_offset = centre_offset  # (dx, dy) or None
         # keep trail
         if estimate and estimate.pos_px:
             self._est_trail.append(tuple(estimate.pos_px))
@@ -62,7 +64,18 @@ class CameraView(QWidget):
         overlay = rgb.copy()
 
         if show_overlays:
-            cx, cy = w // 2, h // 2
+            # Video centre calibration: use calibrated centre if provided (for videos where principal point != frame centre)
+            if getattr(self, '_centre_offset', None) and self._centre_offset is not None:
+                try:
+                    dx, dy = self._centre_offset
+                    cx, cy = int(w // 2 + float(dx)), int(h // 2 + float(dy))
+                    # Clamp to stay inside image
+                    cx = max(0, min(w - 1, cx))
+                    cy = max(0, min(h - 1, cy))
+                except:
+                    cx, cy = w // 2, h // 2
+            else:
+                cx, cy = w // 2, h // 2
 
             # --- subtle grid (optional) ---
             if self.show_grid:

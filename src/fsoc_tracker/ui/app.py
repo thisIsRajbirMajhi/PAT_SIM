@@ -167,10 +167,16 @@ class MainWindow(QMainWindow):
         mode = self.cfg["experiment"]["input_mode"]
         if mode == "VIDEO" and self.cfg["experiment"].get("video_path"):
             try:
-                self.source = VideoSource(self.cfg["experiment"]["video_path"])
+                # Video centre calibration: allow user to offset image centre for videos where principal point != frame centre
+                cx_off = float(self.cfg["camera"].get("video_centre_offset_x", 0))
+                cy_off = float(self.cfg["camera"].get("video_centre_offset_y", 0))
+                self.source = VideoSource(self.cfg["experiment"]["video_path"], centre_offset_x=cx_off, centre_offset_y=cy_off)
                 self.lbl_mode.setText("VIDEO  •  MP4")
                 self.lbl_mode.setStyleSheet(f"background:#FFFBEB; border:1px solid #FDE68A; color:#92400E; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
-                self.lbl_sub.setText("External video  •  PTZ bypassed  •  detector → tracker")
+                self.lbl_sub.setText(f"External video  •  PTZ bypassed  •  {self.source.resolution[0]}×{self.source.resolution[1]} @ {self.source.fps:.1f}Hz  •  centre {cx_off:+.0f},{cy_off:+.0f}")
+                # Do NOT silently resize video to 640×480 — preserve native resolution so error scale stays in native pixels
+                # Update detector config to match video's native resolution (area gates remain in native px)
+                self.cfg["camera"]["resolution"] = list(self.source.resolution)
             except Exception as e:
                 QMessageBox.warning(self, "Video error", str(e))
                 self.cfg["experiment"]["input_mode"] = "SYNTHETIC"
@@ -294,6 +300,7 @@ class MainWindow(QMainWindow):
             stars_enabled=bool(self.cfg.get("environment",{}).get("stars_enabled", False)), stars_density=float(self.cfg.get("environment",{}).get("stars_density",0.0)), stars_brightness=int(self.cfg.get("environment",{}).get("stars_brightness",0)),
             vignetting_enabled=bool(self.cfg.get("environment",{}).get("vignetting_enabled", False)), vignetting_strength=float(self.cfg.get("environment",{}).get("vignetting_strength",0.0)),
             brightness_gain=float(self.cfg.get("environment",{}).get("brightness_gain",1.0)), brightness_offset=int(self.cfg.get("environment",{}).get("brightness_offset",0)),
+            vid_centre_x=float(self.cfg["camera"].get("video_centre_offset_x",0)), vid_centre_y=float(self.cfg["camera"].get("video_centre_offset_y",0)),
             cam_type=self.cfg["camera"].get("type","monochrome"), cam_res=f"{self.cfg['camera']['resolution'][0]}×{self.cfg['camera']['resolution'][1]}", cam_fov=f"{self.cfg['camera']['fov_deg'][0]:.1f}×{self.cfg['camera']['fov_deg'][1]:.1f}", cam_fps=int(self.cfg["camera"].get("fps",30)), cam_init=self.cfg["camera"].get("initial_position","centre"),
             tgt_type=self.cfg["target"].get("type","beacon_spot"), tgt_count=int(self.cfg["target"].get("count",1)), tgt_shape=self.cfg["target"].get("shape","square"), tgt_init=self.cfg["target"].get("initial_mode","random"),
             max_pan=float(self.cfg["camera"].get("max_pan_speed",5.0)), max_tilt=float(self.cfg["camera"].get("max_tilt_speed",5.0)), update_hz=int(self.cfg["camera"].get("update_interval_hz",30)),
@@ -327,8 +334,14 @@ class MainWindow(QMainWindow):
 
         dt = 1.0 / max(float(self.cfg["camera"]["fps"]), 1)
         cmd = self.controller.step(estimate, dt=dt)
-        if isinstance(self.source, SyntheticSource):
+        # Clearly separate PTZ vs measurement-only: only SyntheticSource has PTZ; VideoSource is is_ptz_enabled==False
+        is_ptz = getattr(self.source, "is_ptz_enabled", isinstance(self.source, SyntheticSource))
+        if is_ptz:
             self.source.apply_camera_command(cmd.pan_rate, cmd.tilt_rate, dt)
+        else:
+            # Video mode: measurement-only evaluation, no camera motion — PTZ bypassed per Benchmark Performance-2
+            # Ensure no camera command is applied and dashboard shows bypassed
+            pass
 
         proc_ms = (time.perf_counter() - t0) * 1000
         now = time.perf_counter()
@@ -336,21 +349,31 @@ class MainWindow(QMainWindow):
         self.last_tick_time = now
         self.fps_smooth = 0.85 * self.fps_smooth + 0.15 * inst_fps
 
-        input_fps = float(self.cfg["camera"]["fps"])
+        # Report original FPS (from file for video, from config for synthetic) and actual processing FPS
+        if hasattr(self.source, "fps") and isinstance(self.source, VideoSource):
+            input_fps = float(self.source.fps)  # original FPS from video file
+        else:
+            input_fps = float(self.cfg["camera"]["fps"])
         self.metrics.input_fps = input_fps
         # robust auto-logging: incremental CSV + metrics (flush every 10 frames)
-        self.auto_logger.log_frame(frame.frame_id, frame.timestamp, detection.valid, estimate, gt, proc_ms, self.fps_smooth, cmd.pan_rate, cmd.tilt_rate,
-                                   detection_confidence=detection.confidence, saturated=cmd.saturated, input_fps=input_fps)
+        self.auto_logger.log_frame(frame.frame_id, frame.timestamp, detection.valid, estimate, gt, proc_ms, self.fps_smooth, cmd.pan_rate if is_ptz else 0, cmd.tilt_rate if is_ptz else 0,
+                                   detection_confidence=detection.confidence, saturated=cmd.saturated if is_ptz else False, input_fps=input_fps)
 
-        # views — pass meta for header HUD
+        # views — pass meta for header HUD (original vs processing FPS)
+        # For video, show original FPS from file and proc FPS; for synthetic, both are same (config fps)
+        original_fps_str = f"{input_fps:.1f}"
         meta = {
-            "res": f"{self.cfg['camera']['resolution'][0]}×{self.cfg['camera']['resolution'][1]}",
+            "res": f"{frame.image.shape[1]}×{frame.image.shape[0]}" if len(frame.image.shape)==2 else f"{frame.image.shape[1]}×{frame.image.shape[0]}",
             "fov": f"{self.cfg['camera']['fov_deg'][0]:.1f}°×{self.cfg['camera']['fov_deg'][1]:.1f}°",
-            "fps": f"{self.fps_smooth:.1f} FPS",
+            "fps": f"{self.fps_smooth:.1f} FPS (orig {original_fps_str})" if isinstance(self.source, VideoSource) else f"{self.fps_smooth:.1f} FPS",
             "ts": frame.timestamp,
             "frame_id": frame.frame_id,
         }
-        self.cam_view.set_frame(frame.image, detection=detection, estimate=estimate, show_overlays=self.chk_overlays.isChecked(), meta=meta)
+        # Video centre calibration: pass calibrated centre offset to viewport
+        centre_offset = None
+        if isinstance(self.source, VideoSource):
+            centre_offset = (self.source.centre_offset_x, self.source.centre_offset_y)
+        self.cam_view.set_frame(frame.image, detection=detection, estimate=estimate, show_overlays=self.chk_overlays.isChecked(), meta=meta, centre_offset=centre_offset)
 
         world_pos = gt.world_pos if gt and gt.world_pos != (0, 0) else None
         # debug GT gating: if checkbox unchecked, hide trail in world view (evaluator safety)
@@ -426,6 +449,7 @@ class MainWindow(QMainWindow):
             stars_enabled=bool(self.cfg.get("environment",{}).get("stars_enabled", False)), stars_density=float(self.cfg.get("environment",{}).get("stars_density",0.0)), stars_brightness=int(self.cfg.get("environment",{}).get("stars_brightness",0)),
             vignetting_enabled=bool(self.cfg.get("environment",{}).get("vignetting_enabled", False)), vignetting_strength=float(self.cfg.get("environment",{}).get("vignetting_strength",0.0)),
             brightness_gain=float(self.cfg.get("environment",{}).get("brightness_gain",1.0)), brightness_offset=int(self.cfg.get("environment",{}).get("brightness_offset",0)),
+            vid_centre_x=float(self.cfg["camera"].get("video_centre_offset_x",0)), vid_centre_y=float(self.cfg["camera"].get("video_centre_offset_y",0)),
             cam_type=self.cfg["camera"].get("type","monochrome"), cam_res=f"{self.cfg['camera']['resolution'][0]}×{self.cfg['camera']['resolution'][1]}", cam_fov=f"{self.cfg['camera']['fov_deg'][0]:.1f}×{self.cfg['camera']['fov_deg'][1]:.1f}", cam_fps=int(self.cfg["camera"].get("fps",30)), cam_init=self.cfg["camera"].get("initial_position","centre"),
             tgt_type=self.cfg["target"].get("type","beacon_spot"), tgt_count=int(self.cfg["target"].get("count",1)), tgt_shape=self.cfg["target"].get("shape","square"), tgt_init=self.cfg["target"].get("initial_mode","random"),
             max_pan=float(self.cfg["camera"].get("max_pan_speed",5.0)), max_tilt=float(self.cfg["camera"].get("max_tilt_speed",5.0)), update_hz=int(self.cfg["camera"].get("update_interval_hz",30)),

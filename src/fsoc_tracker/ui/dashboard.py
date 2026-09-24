@@ -200,6 +200,7 @@ class Dashboard(QWidget):
         self.s_env.add_row("stars", "Stars", mono=True)
         self.s_env.add_row("vignetting", "Vignetting", mono=True)
         self.s_env.add_row("brightness", "Brightness", mono=True)
+        self.s_env.add_row("vid_centre", "Video centre", mono=True)
 
         self.s_counts = SectionCard("COUNTS")
         self.s_counts.add_row("frame_id", "Frame ID", mono=True)
@@ -240,6 +241,7 @@ class Dashboard(QWidget):
                         stars_enabled=False, stars_density=0.0, stars_brightness=0,
                         vignetting_enabled=False, vignetting_strength=0.0,
                         brightness_gain=1.0, brightness_offset=0,
+                        vid_centre_x=0.0, vid_centre_y=0.0,
                         cam_type="monochrome", cam_res="640×480", cam_fov="4.0×3.0", cam_fps=30, cam_init="centre",
                         tgt_type="beacon_spot", tgt_count=1, tgt_shape="square", tgt_init="random",
                         max_pan=5.0, max_tilt=5.0, update_hz=30,
@@ -430,6 +432,9 @@ class Dashboard(QWidget):
         bright_txt = f"×{brightness_gain:.2f} {brightness_offset:+d}"
         self.s_env.row("brightness").set_value(bright_txt)
         self.s_env.row("brightness").unit.setText("")
+        vid_txt = f"{vid_centre_x:+.0f},{vid_centre_y:+.0f}" if (vid_centre_x !=0 or vid_centre_y !=0) else "0,0 (centre)"
+        self.s_env.row("vid_centre").set_value(vid_txt, color=COLORS['accent'] if (vid_centre_x !=0 or vid_centre_y !=0) else COLORS['muted'])
+        self.s_env.row("vid_centre").unit.setText("px")
 
         # --- COUNTS ---
         self.s_counts.row("frame_id").set_value(f"{frame_count}")

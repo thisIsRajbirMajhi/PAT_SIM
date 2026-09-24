@@ -37,29 +37,258 @@ class ControlDeck(QDialog):
 
     def _presets_tab(self):
         w = QWidget(); f = QFormLayout(w)
+        # Discover presets from configs/*.yaml
+        import os, glob
+        preset_files = sorted(glob.glob(os.path.join("configs", "*.yaml")))
+        # Map display name -> file
+        self._preset_map = {}
+        display_names = []
+        for pf in preset_files:
+            base = os.path.splitext(os.path.basename(pf))[0]
+            # Pretty: clean_baseline -> Clean Baseline
+            pretty = base.replace("_", " ").title()
+            self._preset_map[pretty] = pf
+            display_names.append(pretty)
+        # Ensure built-ins are present even if files missing
+        for builtin in ["Clean Baseline","High Noise","Platform Jitter","Low Light / Fog","Stars Vignetting","Multi Target","Benchmark Video"]:
+            if builtin not in display_names:
+                display_names.append(builtin)
+        # Keep Custom at end
+        if "Custom" not in display_names:
+            display_names.append("Custom")
         self.preset_combo = QComboBox()
-        self.preset_combo.addItems(["Clean Baseline","High Noise","Platform Jitter","Low Light / Fog","Custom"])
+        self.preset_combo.addItems(display_names)
+        # Try to select Clean Baseline by default
+        try:
+            idx = display_names.index("Clean Baseline")
+            self.preset_combo.setCurrentIndex(idx)
+        except:
+            pass
+        self.preset_desc = QLabel("Preset loads full Sr.1-15 + disturbances + environment. Click Load then Apply.")
+        self.preset_desc.setWordWrap(True)
+        self.preset_desc.setStyleSheet("color:#64748b; font-size:10px;")
         self.seed_spin = QSpinBox(); self.seed_spin.setRange(0,999999); self.seed_spin.setValue(self.cfg["experiment"]["seed"])
         self.duration_spin = QDoubleSpinBox(); self.duration_spin.setRange(5,600); self.duration_spin.setValue(self.cfg["experiment"]["duration_s"])
         self.btn_load_preset = QPushButton("Load Preset")
+        self.btn_save_preset = QPushButton("Save As…")
+        self.btn_save_preset.setToolTip("Save current Control Deck values to a new YAML in configs/")
+        h = QHBoxLayout(); h.addWidget(self.btn_load_preset); h.addWidget(self.btn_save_preset)
         f.addRow("Preset", self.preset_combo)
-        f.addRow("", self.btn_load_preset)
+        f.addRow("", self.preset_desc)
+        f.addRow("", h)
         f.addRow("Random Seed", self.seed_spin)
         f.addRow("Duration (s)", self.duration_spin)
+        # Info about what preset contains
+        self.preset_info = QLabel("Includes: World, Camera (Type/Res/FOV/FPS/Init/Pan-Tilt), Target (Count/Shape/Size/Init/Motion), Disturbances (Noise/Jitter/Atmosphere/Platform), Environment (Gradient/Stars/Vignetting/Brightness)")
+        self.preset_info.setWordWrap(True)
+        self.preset_info.setStyleSheet("color:#64748b; font-size:9px; font-style:italic;")
+        f.addRow(self.preset_info)
         self.btn_load_preset.clicked.connect(self._load_preset)
+        self.btn_save_preset.clicked.connect(self._save_preset)
+        self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
+        self._on_preset_selected(self.preset_combo.currentText())
         return w
+
+    def _on_preset_selected(self, name):
+        # Update description
+        import os
+        pf = self._preset_map.get(name, None)
+        if pf and os.path.exists(pf):
+            try:
+                with open(pf) as f:
+                    head = "".join([next(f) for _ in range(3)])
+                self.preset_desc.setText(f"File: {pf} — loads on 'Load Preset'.")
+            except:
+                self.preset_desc.setText(f"File: {pf}")
+        elif name == "Custom":
+            self.preset_desc.setText("Custom: current deck values. Save As to create new preset.")
+        else:
+            # Built-in fallback (no file)
+            self.preset_desc.setText(f"Built-in preset: {name} — staged, click Load.")
 
     def _load_preset(self):
         name = self.preset_combo.currentText()
-        if name=="Clean Baseline":
-            self._set_fields(atmo="clear", gauss=0, spp=0, jitter=0, platform="none")
-        elif name=="High Noise":
-            self._set_fields(atmo="clear", gauss=12, spp=0.02, jitter=6, platform="linear")
-        elif name=="Platform Jitter":
-            self._set_fields(atmo="clear", gauss=4, spp=0, jitter=14, platform="linear")
-        elif name=="Low Light / Fog":
-            self._set_fields(atmo="fog", gauss=5, spp=0, jitter=4, platform="none")
-        QMessageBox.information(self,"Preset","Preset fields staged. Click Apply to commit.")
+        import os, copy
+        pf = self._preset_map.get(name)
+        try:
+            if pf and os.path.exists(pf):
+                # Load full preset via deep merge with defaults
+                from ..config.loader import load_config
+                new_cfg = load_config(pf)
+                # Preserve current seed/duration if user changed them? No, load from preset then override with current UI's seed/duration if they differ?
+                # For now, take preset as is, then update UI from it
+                self.cfg = new_cfg
+                self._refresh_all_fields()
+                QMessageBox.information(self,"Preset Loaded", f"Loaded {pf}\nAll 7 tabs updated. Click Apply to commit to simulator.")
+                return
+            # Fallback built-ins (for backward compat if file missing)
+            if name=="Clean Baseline":
+                self._set_fields(atmo="clear", gauss=0, spp=0, jitter=0, platform="none")
+            elif name=="High Noise":
+                self._set_fields(atmo="clear", gauss=12, spp=0.02, jitter=6, platform="linear")
+            elif name=="Platform Jitter":
+                self._set_fields(atmo="clear", gauss=4, spp=0, jitter=14, platform="linear")
+            elif name=="Low Light / Fog":
+                self._set_fields(atmo="fog", gauss=5, spp=0, jitter=4, platform="none")
+            elif name=="Stars Vignetting":
+                # Toggle stars/vignetting via cfg then refresh
+                self.cfg["environment"]["stars_enabled"] = True
+                self.cfg["environment"]["vignetting_enabled"] = True
+                self.cfg["environment"]["gradient_enabled"] = True
+                self._refresh_all_fields()
+            elif name=="Multi Target":
+                self.cfg["target"]["count"] = 3
+                self._refresh_all_fields()
+            elif name=="Benchmark Video":
+                self.cfg["experiment"]["input_mode"] = "VIDEO"
+                self.cfg["experiment"]["video_path"] = "data/input_videos/test_beacon.mp4"
+                self._refresh_all_fields()
+            QMessageBox.information(self,"Preset","Preset fields staged. Click Apply to commit.")
+        except Exception as e:
+            QMessageBox.warning(self,"Preset Load Failed", str(e))
+
+    def _refresh_all_fields(self):
+        """Re-populate every widget from self.cfg (called after loading a preset). Called before Apply so user sees values."""
+        try:
+            # Experiment
+            self.seed_spin.setValue(int(self.cfg["experiment"].get("seed",42)))
+            self.duration_spin.setValue(float(self.cfg["experiment"].get("duration_s",30)))
+            # Target
+            self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
+            self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
+            self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square"))
+            self.size_spin.setValue(int(self.cfg["target"].get("size",10)))
+            self.tgt_init_mode_combo.setCurrentText(self.cfg["target"].get("initial_mode","random"))
+            ip = self.cfg["target"].get("initial_pos")
+            if ip and len(ip)==2:
+                self.tgt_init_x_spin.setValue(int(ip[0])); self.tgt_init_y_spin.setValue(int(ip[1]))
+            self.traj_combo.setCurrentText(self.cfg["target"].get("trajectory","circular"))
+            self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file","") or "")
+            # Custom polygon
+            poly = self.cfg["target"].get("custom_polygon")
+            if poly:
+                self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in poly]))
+            else:
+                self.custom_polygon_edit.clear()
+            self.speed_spin.setValue(float(self.cfg["target"].get("speed_px_per_frame",2.8)))
+            self.angle_spin.setValue(float(self.cfg["target"].get("angle_deg",30)))
+            self.radius_spin.setValue(float(self.cfg["target"].get("radius",180)))
+            # Camera
+            self.cam_type_combo.setCurrentText(self.cfg["camera"].get("type","monochrome"))
+            self.res_w_spin.setValue(int(self.cfg["camera"]["resolution"][0]))
+            self.res_h_spin.setValue(int(self.cfg["camera"]["resolution"][1]))
+            self.fov_h_spin.setValue(float(self.cfg["camera"]["fov_deg"][0]))
+            self.fov_v_spin.setValue(float(self.cfg["camera"]["fov_deg"][1]))
+            self.fps_spin.setValue(int(self.cfg["camera"].get("fps",30)))
+            self.cam_init_combo.setCurrentText(self.cfg["camera"].get("initial_position","centre"))
+            self.cam_init_pan_spin.setValue(float(self.cfg["camera"].get("initial_pan",0)))
+            self.cam_init_tilt_spin.setValue(float(self.cfg["camera"].get("initial_tilt",0)))
+            self.max_pan_spin.setValue(float(self.cfg["camera"].get("max_pan_speed",5)))
+            self.max_tilt_spin.setValue(float(self.cfg["camera"].get("max_tilt_speed",5)))
+            self.update_hz_spin.setValue(int(self.cfg["camera"].get("update_interval_hz",30)))
+            self.jitter_spin.setValue(float(self.cfg["camera"].get("jitter_px",0)))
+            # Environment
+            self.world_w_spin.setValue(int(self.cfg["world"]["width"]))
+            self.world_h_spin.setValue(int(self.cfg["world"]["height"]))
+            self.world_bg_spin.setValue(int(self.cfg["world"].get("background",18)))
+            self.platform_combo.setCurrentText(self.cfg["platform"].get("type","none"))
+            self.platform_speed_spin.setValue(float(self.cfg["platform"].get("speed_px_per_frame",0)))
+            env = self.cfg.get("environment",{})
+            self.grad_enabled.setChecked(bool(env.get("gradient_enabled",False)))
+            self.grad_type_combo.setCurrentText(env.get("gradient_type","linear"))
+            self.grad_top_spin.setValue(int(env.get("gradient_top",22)))
+            self.grad_bottom_spin.setValue(int(env.get("gradient_bottom",38)))
+            self.grad_angle_spin.setValue(int(env.get("gradient_angle",90)))
+            self.stars_enabled.setChecked(bool(env.get("stars_enabled",False)))
+            self.stars_density_spin.setValue(float(env.get("stars_density",0.0007)))
+            self.stars_brightness_spin.setValue(int(env.get("stars_brightness",185)))
+            self.stars_minmag_spin.setValue(int(env.get("stars_min_mag",90)))
+            self.stars_maxmag_spin.setValue(int(env.get("stars_max_mag",255)))
+            self.stars_twinkle_check.setChecked(bool(env.get("stars_twinkle",False)))
+            self.stars_seed_spin.setValue(int(env.get("stars_seed",1337)))
+            self.vig_enabled.setChecked(bool(env.get("vignetting_enabled",False)))
+            self.vig_strength_spin.setValue(float(env.get("vignetting_strength",0.42)))
+            self.vig_radius_spin.setValue(float(env.get("vignetting_radius",0.72)))
+            self.vig_falloff_spin.setValue(float(env.get("vignetting_falloff",2.0)))
+            self.vig_cx_spin.setValue(float(env.get("vignetting_center_x",0.5)))
+            self.vig_cy_spin.setValue(float(env.get("vignetting_center_y",0.5)))
+            self.bright_gain_spin.setValue(float(env.get("brightness_gain",1.0)))
+            self.bright_offset_spin.setValue(int(env.get("brightness_offset",0)))
+            # Disturbances
+            self.atmo_combo.setCurrentText(self.cfg["atmosphere"].get("type","clear"))
+            self.atmo_strength.setValue(float(self.cfg["atmosphere"].get("strength",0)))
+            self.gauss_check.setChecked(bool(self.cfg["noise"].get("gaussian_enabled",False)))
+            self.gauss_spin.setValue(float(self.cfg["noise"].get("gaussian_std",0)))
+            self.spp_check.setChecked(bool(self.cfg["noise"].get("salt_pepper_enabled",False)))
+            self.spp_spin.setValue(float(self.cfg["noise"].get("salt_pepper_prob",0)))
+            self.poisson_check.setChecked(bool(self.cfg["noise"].get("poisson",False)))
+            # Input
+            self.input_combo.setCurrentText(self.cfg["experiment"].get("input_mode","SYNTHETIC"))
+            self.video_path_edit.setText(self.cfg["experiment"].get("video_path",""))
+            self.vid_centre_x_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_x",0)))
+            self.vid_centre_y_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_y",0)))
+        except Exception as e:
+            print(f"[ControlDeck] _refresh_all_fields failed: {e}")
+
+    def _save_preset(self):
+        path,_ = QFileDialog.getSaveFileName(self, "Save Preset YAML", "configs/my_preset.yaml", "YAML (*.yaml *.yml)")
+        if not path:
+            return
+        try:
+            # Build cfg from current UI (without emitting) then save
+            # Temporarily build a copy
+            import copy, yaml, os
+            # Force _apply logic but not emit
+            tmp_cfg = copy.deepcopy(self.cfg)
+            # Re-use _apply code path to fill tmp_cfg from widgets (duplicate logic)
+            # Instead, just save current self.cfg as is (which was last loaded) — user should Apply first for latest UI
+            # So we first sync UI to tmp_cfg
+            self._apply_to_cfg(tmp_cfg)
+            with open(path, "w") as f:
+                yaml.safe_dump(tmp_cfg, f, sort_keys=False)
+            QMessageBox.information(self,"Saved", f"Preset saved to {path}\nIt will appear in the Preset combo on next open.")
+        except Exception as e:
+            QMessageBox.warning(self,"Save Failed", str(e))
+
+    def _apply_to_cfg(self, c):
+        # Helper to sync current UI widgets into a cfg dict (used by Save As)
+        try:
+            c["target"]["type"] = self.tgt_type_combo.currentText()
+            c["target"]["count"] = int(self.tgt_count_spin.value())
+            c["target"]["shape"] = self.tgt_shape_combo.currentText()
+            c["target"]["size"] = int(self.size_spin.value())
+            mode = self.tgt_init_mode_combo.currentText()
+            c["target"]["initial_mode"] = mode
+            if mode == "random":
+                c["target"]["initial_pos"] = None
+            elif mode == "centre":
+                c["target"]["initial_pos"] = [int(c["world"]["width"]//2), int(c["world"]["height"]//2)]
+            else:
+                c["target"]["initial_pos"] = [int(self.tgt_init_x_spin.value()), int(self.tgt_init_y_spin.value())]
+            c["target"]["trajectory"] = self.traj_combo.currentText()
+            c["target"]["speed_px_per_frame"] = float(self.speed_spin.value())
+            c["target"]["angle_deg"] = float(self.angle_spin.value())
+            c["target"]["radius"] = float(self.radius_spin.value())
+            if c["target"]["shape"] == "user-defined":
+                txt = self.custom_polygon_edit.text().strip()
+                if txt:
+                    pts = []
+                    for part in txt.split(";"):
+                        part=part.strip()
+                        if not part: continue
+                        x_str,y_str = part.split(",")
+                        pts.append([int(float(x_str.strip())), int(float(y_str.strip()))])
+                    c["target"]["custom_polygon"] = pts if len(pts)>=3 else None
+                else:
+                    c["target"]["custom_polygon"] = None
+            else:
+                c["target"]["custom_polygon"] = None
+            if c["target"]["trajectory"] == "user-defined":
+                c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None
+            else:
+                c["target"]["custom_trajectory_file"] = None
+        except Exception:
+            pass
 
     def _set_fields(self, atmo, gauss, spp, jitter, platform):
         # update widgets if they exist
