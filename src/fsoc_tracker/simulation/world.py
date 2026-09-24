@@ -239,6 +239,24 @@ class World:
             world_pos = self.world_pos
         img = self.base.copy()
 
+        # P11 visibility schedule: hide beacon during hidden intervals (forces loss/re-acq)
+        vis_sched = self.cfg["target"].get("visibility_schedule") or self.cfg.get("visibility", {}).get("schedule")
+        if vis_sched:
+            try:
+                t = self.frame_id / max(float(self.cfg["camera"].get("fps", 30)), 1)
+                hidden = False
+                for seg in vis_sched:
+                    # seg: [start, end, "visible"/"hidden"]
+                    if len(seg) >= 3:
+                        s, e, state = seg[0], seg[1], str(seg[2]).lower()
+                        if s <= t < e and state in ("hidden", "invisible", "off"):
+                            hidden = True
+                            break
+                if hidden:
+                    return img  # no beacon drawn
+            except Exception:
+                pass
+
         env = self.cfg.get("environment", {})
         if env.get("stars_enabled") and env.get("stars_twinkle"):
             jit = np.random.default_rng(self.frame_id * 9973).integers(-6, 7, size=img.shape, dtype=np.int16)

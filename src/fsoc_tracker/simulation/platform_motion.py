@@ -3,13 +3,23 @@ import math, numpy as np
 class PlatformMotion:
     def __init__(self, cfg, seed=42):
         self.type = cfg["platform"].get("type","none")
-        self.speed = float(cfg["platform"].get("speed_px_per_frame",0))
+        # Support both scalar speed and vector velocity [vx,vy] per Preset Plan P09
+        vel = cfg["platform"].get("velocity_px_frame", cfg["platform"].get("velocity_px_per_frame", None))
+        if isinstance(vel, (list, tuple)) and len(vel) == 2:
+            self.velocity = np.array([float(vel[0]), float(vel[1])])
+            self.speed = float(np.hypot(vel[0], vel[1]))
+        else:
+            self.velocity = None
+            self.speed = float(cfg["platform"].get("speed_px_per_frame", 0))
+            if vel is not None and not isinstance(vel, (list, tuple)):
+                # scalar velocity alias
+                self.speed = float(vel)
         self.amp = float(cfg["platform"].get("amplitude",0))
         self.rng = np.random.default_rng(seed)
         self.offset = np.array([0.0, 0.0])
         self.prev_offset = np.array([0.0, 0.0])
         self.t = 0
-        self.dir = self.rng.uniform(0, 2*math.pi) if self.type=="linear" else 0
+        self.dir = self.rng.uniform(0, 2*math.pi) if self.type=="linear" and self.velocity is None else 0
         # for spiral/figure8 keep phase
         self.spiral_r = 0.0
 
@@ -19,8 +29,11 @@ class PlatformMotion:
             return (0.0, 0.0)
         new_offset = self.offset.copy()
         if self.type == "linear":
-            dx = math.cos(self.dir) * self.speed
-            dy = math.sin(self.dir) * self.speed
+            if self.velocity is not None:
+                dx, dy = float(self.velocity[0]), float(self.velocity[1])
+            else:
+                dx = math.cos(self.dir) * self.speed
+                dy = math.sin(self.dir) * self.speed
             new_offset[0] += dx
             new_offset[1] += dy
             new_offset = np.clip(new_offset, -600, 600)

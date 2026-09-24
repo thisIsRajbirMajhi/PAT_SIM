@@ -37,36 +37,54 @@ class ControlDeck(QDialog):
 
     def _presets_tab(self):
         w = QWidget(); f = QFormLayout(w)
-        # Discover presets from configs/*.yaml
-        import os, glob
+        # Discover presets from configs/*.yaml — P01..P12 from Preset Plan.md
+        import os, glob, yaml
         preset_files = sorted(glob.glob(os.path.join("configs", "*.yaml")))
-        # Map display name -> file
         self._preset_map = {}
+        self._preset_meta_map = {}
         display_names = []
         for pf in preset_files:
             base = os.path.splitext(os.path.basename(pf))[0]
-            # Pretty: clean_baseline -> Clean Baseline
-            pretty = base.replace("_", " ").title()
+            # Pretty: P01_clean_baseline -> P01 - Clean Baseline
+            if base.startswith("P") and "_" in base:
+                # Split Pxx prefix
+                prefix = base[:3]  # P01
+                rest = base[4:] if len(base) > 4 else base[3:]
+                pretty = f"{prefix} - {rest.replace('_',' ').title()}"
+            else:
+                pretty = base.replace("_", " ").title()
             self._preset_map[pretty] = pf
             display_names.append(pretty)
-        # Ensure built-ins are present even if files missing
+            # Try to read preset_meta for description
+            try:
+                with open(pf) as fh:
+                    data = yaml.safe_load(fh) or {}
+                self._preset_meta_map[pretty] = data.get("preset_meta", {})
+            except:
+                self._preset_meta_map[pretty] = {}
+        # Ensure built-ins are present even if files missing (legacy)
         for builtin in ["Clean Baseline","High Noise","Platform Jitter","Low Light / Fog","Stars Vignetting","Multi Target","Benchmark Video"]:
             if builtin not in display_names:
                 display_names.append(builtin)
-        # Keep Custom at end
         if "Custom" not in display_names:
             display_names.append("Custom")
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(display_names)
-        # Try to select Clean Baseline by default
+        # Default to P01 Clean Baseline if available
         try:
-            idx = display_names.index("Clean Baseline")
-            self.preset_combo.setCurrentIndex(idx)
+            for cand in ["P01 - Clean Baseline", "P01 — Clean Baseline", "Clean Baseline"]:
+                if cand in display_names:
+                    self.preset_combo.setCurrentIndex(display_names.index(cand))
+                    break
         except:
             pass
         self.preset_desc = QLabel("Preset loads full Sr.1-15 + disturbances + environment. Click Load then Apply.")
         self.preset_desc.setWordWrap(True)
         self.preset_desc.setStyleSheet("color:#64748b; font-size:10px;")
+        self.preset_expected = QLabel("")
+        self.preset_expected.setWordWrap(True)
+        self.preset_expected.setStyleSheet("color:#0f172a; font-size:10px; background:#f1f5f9; padding:4px; border-radius:4px;")
+        self.preset_expected.hide()
         self.seed_spin = QSpinBox(); self.seed_spin.setRange(0,999999); self.seed_spin.setValue(self.cfg["experiment"]["seed"])
         self.duration_spin = QDoubleSpinBox(); self.duration_spin.setRange(5,600); self.duration_spin.setValue(self.cfg["experiment"]["duration_s"])
         self.btn_load_preset = QPushButton("Load Preset")
@@ -75,14 +93,19 @@ class ControlDeck(QDialog):
         h = QHBoxLayout(); h.addWidget(self.btn_load_preset); h.addWidget(self.btn_save_preset)
         f.addRow("Preset", self.preset_combo)
         f.addRow("", self.preset_desc)
+        f.addRow("", self.preset_expected)
         f.addRow("", h)
         f.addRow("Random Seed", self.seed_spin)
         f.addRow("Duration (s)", self.duration_spin)
-        # Info about what preset contains
         self.preset_info = QLabel("Includes: World, Camera (Type/Res/FOV/FPS/Init/Pan-Tilt), Target (Count/Shape/Size/Init/Motion), Disturbances (Noise/Jitter/Atmosphere/Platform), Environment (Gradient/Stars/Vignetting/Brightness)")
         self.preset_info.setWordWrap(True)
         self.preset_info.setStyleSheet("color:#64748b; font-size:9px; font-style:italic;")
         f.addRow(self.preset_info)
+        # Quick-run row: run order hint
+        self.preset_order = QLabel("Order: P01 baseline first, then P02–P04 motion, P05–P07 detection, P08–P09 disturbances, P10–P11 acquisition, P12 video.")
+        self.preset_order.setWordWrap(True)
+        self.preset_order.setStyleSheet("color:#64748b; font-size:9px;")
+        f.addRow(self.preset_order)
         self.btn_load_preset.clicked.connect(self._load_preset)
         self.btn_save_preset.clicked.connect(self._save_preset)
         self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
@@ -90,21 +113,39 @@ class ControlDeck(QDialog):
         return w
 
     def _on_preset_selected(self, name):
-        # Update description
-        import os
+        import os, yaml
         pf = self._preset_map.get(name, None)
+        meta = getattr(self, "_preset_meta_map", {}).get(name, {})
         if pf and os.path.exists(pf):
+            purpose = meta.get("purpose", "")
+            expected = meta.get("expected", {})
+            exp_str = ", ".join([f"{k} {v}" for k,v in expected.items()]) if expected else ""
             try:
-                with open(pf) as f:
-                    head = "".join([next(f) for _ in range(3)])
-                self.preset_desc.setText(f"File: {pf} — loads on 'Load Preset'.")
+                self.preset_desc.setText(f"File: {pf}" + (f" — {purpose}" if purpose else " — loads on 'Load Preset'."))
             except:
                 self.preset_desc.setText(f"File: {pf}")
+            if exp_str:
+                self.preset_expected.setText(f"Expected: {exp_str}")
+                self.preset_expected.show()
+            else:
+                # Try read header comments for purpose if no meta
+                try:
+                    with open(pf) as f:
+                        lines = [next(f) for _ in range(5)]
+                    hdr = " ".join([l.strip("# ").strip() for l in lines if l.startswith("#")])
+                    if hdr and len(hdr) > 10:
+                        self.preset_expected.setText(hdr[:220])
+                        self.preset_expected.show()
+                    else:
+                        self.preset_expected.hide()
+                except:
+                    self.preset_expected.hide()
         elif name == "Custom":
             self.preset_desc.setText("Custom: current deck values. Save As to create new preset.")
+            self.preset_expected.hide()
         else:
-            # Built-in fallback (no file)
             self.preset_desc.setText(f"Built-in preset: {name} — staged, click Load.")
+            self.preset_expected.hide()
 
     def _load_preset(self):
         name = self.preset_combo.currentText()
@@ -112,14 +153,25 @@ class ControlDeck(QDialog):
         pf = self._preset_map.get(name)
         try:
             if pf and os.path.exists(pf):
-                # Load full preset via deep merge with defaults
                 from ..config.loader import load_config
                 new_cfg = load_config(pf)
-                # Preserve current seed/duration if user changed them? No, load from preset then override with current UI's seed/duration if they differ?
-                # For now, take preset as is, then update UI from it
                 self.cfg = new_cfg
                 self._refresh_all_fields()
-                QMessageBox.information(self,"Preset Loaded", f"Loaded {pf}\nAll 7 tabs updated. Click Apply to commit to simulator.")
+                meta = getattr(self, "_preset_meta_map", {}).get(name, {})
+                exp = meta.get("expected", {})
+                exp_str = ", ".join([f"{k} {v}" for k,v in exp.items()]) if exp else ""
+                msg = f"Loaded {pf}\nAll 7 tabs updated. Click Apply to commit to simulator."
+                if exp_str:
+                    msg += f"\n\nExpected: {exp_str}"
+                # Also show purpose header if available
+                try:
+                    with open(pf) as fh:
+                        first = fh.readline().strip()
+                    if first.startswith("#"):
+                        msg = first.strip("# ").strip() + "\n\n" + msg
+                except:
+                    pass
+                QMessageBox.information(self,"Preset Loaded", msg)
                 return
             # Fallback built-ins (for backward compat if file missing)
             if name=="Clean Baseline":

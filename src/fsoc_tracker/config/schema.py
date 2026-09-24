@@ -19,7 +19,7 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # -- Target Parameters --
     assert cfg["target"]["type"] in ("beacon_spot", "beacon", "spot"), "Beacon Spot"
     assert 1 <= cfg["target"]["count"] <= 5, "Number of Targets 1-5 (1 mandatory)"
-    assert cfg["target"]["shape"] in ("square", "circle", "gaussian", "cross"), "Shape square default"
+    assert cfg["target"]["shape"] in ("square", "circle", "gaussian", "cross", "user-defined", "user_defined"), "Shape square default + user-defined"
     assert 5 <= cfg["target"]["size"] <= 20, "Target Size 5-20 px"
     # initial pos None=Random or [x,y]
     ip = cfg["target"]["initial_pos"]

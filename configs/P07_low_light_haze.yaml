@@ -1,0 +1,113 @@
+# P07 -- Low light and haze
+# Purpose: Adaptive thresholding, contrast normalization and confidence-based measurement covariance.
+# Expected: valid_detection >=85%, state LOCKED_or_TEMPORARILY_LOST, reacq <=1.0s
+# Plan: circular r160 angular 14deg/s intensity 0.35, gauss 6 poisson 0.20 spp 0.002, atmosphere haze contrast 0.45 brightness 0.35
+# Shared defaults per Preset Plan.md: input fps 30 res 640x480, camera hfov 4 vfov 3 max_pan/tilt 5 update 30, beacon size 10 intensity 1.0, controller pid kp 1.0 kd 0.15 dead 2 reacq 1s, tracker imm_ekf gate 3 sigma pred 3 temp 10
+world:
+  width: 2000
+  height: 2000
+  background: 10
+camera:
+  type: monochrome
+  resolution:
+  - 640
+  - 480
+  fov_deg:
+  - 4.0
+  - 3.0
+  fps: 30
+  initial_position: centre
+  initial_pan: 0.0
+  initial_tilt: 0.0
+  max_pan_speed: 5.0
+  max_tilt_speed: 5.0
+  update_interval_hz: 30
+  jitter_px: 0
+  video_centre_offset_x: 0.0
+  video_centre_offset_y: 0.0
+target:
+  type: beacon_spot
+  count: 1
+  shape: square
+  size: 10
+  initial_pos: null
+  initial_mode: random
+  trajectory: circular
+  speed_px_per_frame: 1.6
+  angle_deg: 30.0
+  radius: 160
+  intensity: 90
+  custom_polygon: null
+  custom_trajectory_file: null
+  custom_trajectory_path: null
+platform:
+  type: none
+  speed_px_per_frame: 0
+  amplitude: 0
+noise:
+  gaussian_enabled: true
+  gaussian_std: 6.0
+  salt_pepper_enabled: true
+  salt_pepper_prob: 0.002
+  poisson: true
+atmosphere:
+  type: haze
+  strength: 0.55
+environment:
+  gradient_enabled: true
+  gradient_type: linear
+  gradient_top: 10
+  gradient_bottom: 22
+  gradient_angle: 90
+  stars_enabled: false
+  stars_density: 0.0007
+  stars_brightness: 185
+  stars_min_mag: 90
+  stars_max_mag: 255
+  stars_twinkle: false
+  stars_seed: 1337
+  vignetting_enabled: false
+  vignetting_strength: 0.42
+  vignetting_radius: 0.72
+  vignetting_falloff: 2.0
+  vignetting_center_x: 0.5
+  vignetting_center_y: 0.5
+  brightness_gain: 0.7
+  brightness_offset: -10
+detector:
+  threshold_k: 3.0
+  min_area: 8
+  max_area: 900
+  blur_ksize: 3
+  adaptive_block: 51
+  adaptive_C: -5
+tracker:
+  process_noise: 0.8
+  meas_noise: 4.0
+  gate_sigma: 3.0
+  lost_timeout_frames: 15
+  reacq_timeout_frames: 30
+controller:
+  kp_pan: 1.0
+  kp_tilt: 1.0
+  ki: 0.0
+  kd: 0.15
+  deadzone_px: 2.0
+  integral_limit: 8.0
+  feedforward_gain: 0.0
+experiment:
+  duration_s: 30.0
+  seed: 48
+  input_mode: SYNTHETIC
+  video_path: ''
+preset_meta:
+  preset: P07_low_light_haze
+  purpose: Low light/haze
+  expected:
+    valid_detection_percent: '>=85'
+    state: LOCKED_or_TEMPORARILY_LOST
+    reacquisition_time_s: <=1.0
+  plan_extra:
+    contrast_scale: 0.45
+    brightness_scale: 0.35
+    poisson_strength: 0.2
