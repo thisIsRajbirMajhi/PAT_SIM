@@ -38,7 +38,7 @@ class CameraView(QWidget):
     def set_frame(self, frame_gray, detection=None, estimate=None, world_camera=None, show_overlays=True, meta=None):
         if frame_gray is None:
             return
-        h, w = frame_gray.shape
+        h, w = frame_gray.shape[:2]
         self._w, self._h = w, h
         self._detection = detection
         self._estimate = estimate
@@ -54,7 +54,11 @@ class CameraView(QWidget):
                 # slowly decay
                 pass
 
-        rgb = cv2.cvtColor(frame_gray, cv2.COLOR_GRAY2RGB)
+        # Sr.2 Camera Type: handle both monochrome (gray) and colour (BGR)
+        if len(frame_gray.shape) == 3:
+            rgb = cv2.cvtColor(frame_gray, cv2.COLOR_BGR2RGB)
+        else:
+            rgb = cv2.cvtColor(frame_gray, cv2.COLOR_GRAY2RGB)
         overlay = rgb.copy()
 
         if show_overlays:

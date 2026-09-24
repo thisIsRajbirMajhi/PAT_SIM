@@ -168,16 +168,38 @@ class Dashboard(QWidget):
         self.s_controller.add_row("saturated", "Saturated", mono=True)
         self.s_controller.add_row("sat_cnt", "Saturation count", mono=True)
 
-        self.s_env = SectionCard("ENVIRONMENT")
-        self.s_env.add_row("atmo", "Atmosphere", mono=True)
-        self.s_env.add_row("noise", "Noise", mono=True)
-        self.s_env.add_row("jitter", "Jitter", mono=True)
-        self.s_env.add_row("platform", "Platform", mono=True)
-        self.s_env.add_row("seed", "Seed", mono=True)
-        self.s_env.add_row("world", "World size", mono=True)
-        self.s_env.add_row("traj", "Trajectory", mono=True)
+        self.s_env = SectionCard("ENVIRONMENT & PARAMETERS")
+        self.s_env.add_row("cam_type", "Camera Type", mono=True)
+        self.s_env.add_row("cam_res", "Resolution", mono=True)
+        self.s_env.add_row("cam_fov", "Field of View", mono=True)
+        self.s_env.add_row("cam_fps", "Frame Rate", mono=True)
+        self.s_env.add_row("cam_init", "Initial Camera", mono=True)
+        self.s_env.add_row("world", "World Dimensions", mono=True)
+        self.s_env.add_row("tgt_type", "Target Type", mono=True)
+        self.s_env.add_row("tgt_count", "Target Count", mono=True)
+        self.s_env.add_row("tgt_shape", "Target Shape", mono=True)
+        self.s_env.add_row("tgt_size", "Target Size", mono=True)
+        self.s_env.add_row("tgt_init", "Initial Target", mono=True)
+        self.s_env.add_row("traj", "Motion Trajectory", mono=True)
         self.s_env.add_row("tgt_speed", "Target speed", mono=True)
-        self.s_env.add_row("tgt_size", "Target size", mono=True)
+        self.s_env.add_row("max_pan", "Maximum Pan Speed", mono=True)
+        self.s_env.add_row("max_tilt", "Maximum Tilt Speed", mono=True)
+        self.s_env.add_row("upd_hz", "Update Rate", mono=True)
+        self.s_env.add_row("atmo", "Atmospheric Condition", mono=True)
+        self.s_env.add_row("atmo_str", "  Atmo strength", mono=True)
+        self.s_env.add_row("noise", "Image Noise", mono=True)
+        self.s_env.add_row("gauss", "  Gaussian σ", mono=True)
+        self.s_env.add_row("spp", "  S&P prob", mono=True)
+        self.s_env.add_row("poisson", "  Poisson", mono=True)
+        self.s_env.add_row("jitter", "Camera Jitter", mono=True)
+        self.s_env.add_row("platform", "Platform Motion", mono=True)
+        self.s_env.add_row("plat_speed", "  Plat speed", mono=True)
+        self.s_env.add_row("seed", "Seed", mono=True)
+        # gradient / stars / vignetting / brightness — each own field
+        self.s_env.add_row("gradient", "Gradient", mono=True)
+        self.s_env.add_row("stars", "Stars", mono=True)
+        self.s_env.add_row("vignetting", "Vignetting", mono=True)
+        self.s_env.add_row("brightness", "Brightness", mono=True)
 
         self.s_counts = SectionCard("COUNTS")
         self.s_counts.add_row("frame_id", "Frame ID", mono=True)
@@ -213,7 +235,15 @@ class Dashboard(QWidget):
                        pan_rate, tilt_rate, pan_angle, tilt_angle,
                        saturated, saturation_count,
                        atmo, noise_str, jitter, platform, seed,
-                       world_size, trajectory, target_speed, target_size):
+                       world_size, trajectory, target_speed, target_size,
+                        gradient_enabled=False, gradient_type="linear",
+                        stars_enabled=False, stars_density=0.0, stars_brightness=0,
+                        vignetting_enabled=False, vignetting_strength=0.0,
+                        brightness_gain=1.0, brightness_offset=0,
+                        cam_type="monochrome", cam_res="640×480", cam_fov="4.0×3.0", cam_fps=30, cam_init="centre",
+                        tgt_type="beacon_spot", tgt_count=1, tgt_shape="square", tgt_init="random",
+                        max_pan=5.0, max_tilt=5.0, update_hz=30,
+                        atmo_strength=0.0, gauss_std=0.0, spp_prob=0.0, poisson_enabled=False, platform_speed=0.0):
         # helper to format
         def fmt(v, nd=1, unit=""):
             if v is None:
@@ -350,12 +380,36 @@ class Dashboard(QWidget):
         self.s_controller.row("sat_cnt").set_value(f"{saturation_count}", color=sat_c if saturation_count>0 else COLORS["muted"])
         self.s_controller.dot.setStyleSheet(f"color:{sat_c}; font-size:10px;")
 
-        # --- ENVIRONMENT ---
+        # --- ENVIRONMENT & PARAMETERS — each own field ---
+        self.s_env.row("cam_type").set_value(cam_type)
+        self.s_env.row("cam_res").set_value(cam_res)
+        self.s_env.row("cam_fov").set_value(cam_fov)
+        self.s_env.row("cam_fps").set_value(f"{cam_fps}")
+        self.s_env.row("cam_fps").unit.setText("Hz")
+        self.s_env.row("cam_init").set_value(cam_init)
+        self.s_env.row("tgt_type").set_value(tgt_type)
+        self.s_env.row("tgt_count").set_value(f"{tgt_count}")
+        self.s_env.row("tgt_shape").set_value(tgt_shape)
+        self.s_env.row("tgt_init").set_value(tgt_init)
+        self.s_env.row("max_pan").set_value(f"{max_pan:.1f}")
+        self.s_env.row("max_pan").unit.setText("°/s")
+        self.s_env.row("max_tilt").set_value(f"{max_tilt:.1f}")
+        self.s_env.row("max_tilt").unit.setText("°/s")
+        self.s_env.row("upd_hz").set_value(f"{update_hz}")
+        self.s_env.row("upd_hz").unit.setText("Hz")
         self.s_env.row("atmo").set_value(atmo)
+        self.s_env.row("atmo_str").set_value(f"{atmo_strength:.2f}")
+        self.s_env.row("atmo_str").unit.setText("")
         self.s_env.row("noise").set_value(noise_str if noise_str else "clean")
+        self.s_env.row("gauss").set_value(f"{gauss_std:.1f}")
+        self.s_env.row("gauss").unit.setText("px")
+        self.s_env.row("spp").set_value(f"{spp_prob:.3f}")
+        self.s_env.row("poisson").set_value("ON" if poisson_enabled else "OFF", color=COLORS['accent'] if poisson_enabled else COLORS['muted'])
         self.s_env.row("jitter").set_value(f"±{jitter:.0f}")
         self.s_env.row("jitter").unit.setText("px")
         self.s_env.row("platform").set_value(platform)
+        self.s_env.row("plat_speed").set_value(f"{platform_speed:.1f}")
+        self.s_env.row("plat_speed").unit.setText("px/f")
         self.s_env.row("seed").set_value(f"{seed}")
         self.s_env.row("world").set_value(f"{world_size[0]}×{world_size[1]}")
         self.s_env.row("world").unit.setText("px")
@@ -364,6 +418,18 @@ class Dashboard(QWidget):
         self.s_env.row("tgt_speed").unit.setText("px/f")
         self.s_env.row("tgt_size").set_value(f"{target_size}")
         self.s_env.row("tgt_size").unit.setText("px")
+        # --- new env systems each own field ---
+        grad_txt = f"{gradient_type} {'ON' if gradient_enabled else 'OFF'}"
+        self.s_env.row("gradient").set_value(grad_txt, color=COLORS['accent'] if gradient_enabled else COLORS['muted'])
+        self.s_env.row("gradient").unit.setText("")
+        self.s_env.row("stars").set_value(f"{'ON' if stars_enabled else 'OFF'} {stars_density:.4f}", color=COLORS['accent'] if stars_enabled else COLORS['muted'])
+        self.s_env.row("stars").unit.setText(f"{stars_brightness}" if stars_enabled else "")
+        vig_txt = f"{'ON' if vignetting_enabled else 'OFF'} {vignetting_strength:.2f}" if vignetting_enabled else "OFF"
+        self.s_env.row("vignetting").set_value(vig_txt, color=COLORS['accent'] if vignetting_enabled else COLORS['muted'])
+        self.s_env.row("vignetting").unit.setText("")
+        bright_txt = f"×{brightness_gain:.2f} {brightness_offset:+d}"
+        self.s_env.row("brightness").set_value(bright_txt)
+        self.s_env.row("brightness").unit.setText("")
 
         # --- COUNTS ---
         self.s_counts.row("frame_id").set_value(f"{frame_count}")

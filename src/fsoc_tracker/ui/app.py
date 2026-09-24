@@ -277,7 +277,15 @@ class MainWindow(QMainWindow):
             atmo=self.cfg["atmosphere"]["type"], noise_str="none", jitter=float(self.cfg["camera"]["jitter_px"]),
             platform=self.cfg["platform"]["type"], seed=self.cfg["experiment"]["seed"],
             world_size=(self.cfg["world"]["width"], self.cfg["world"]["height"]),
-            trajectory=self.cfg["target"]["trajectory"], target_speed=float(self.cfg["target"]["speed_px_per_frame"]), target_size=int(self.cfg["target"]["size"])
+            trajectory=self.cfg["target"]["trajectory"], target_speed=float(self.cfg["target"]["speed_px_per_frame"]), target_size=int(self.cfg["target"]["size"]),
+            gradient_enabled=bool(self.cfg.get("environment",{}).get("gradient_enabled", False)), gradient_type=self.cfg.get("environment",{}).get("gradient_type","linear"),
+            stars_enabled=bool(self.cfg.get("environment",{}).get("stars_enabled", False)), stars_density=float(self.cfg.get("environment",{}).get("stars_density",0.0)), stars_brightness=int(self.cfg.get("environment",{}).get("stars_brightness",0)),
+            vignetting_enabled=bool(self.cfg.get("environment",{}).get("vignetting_enabled", False)), vignetting_strength=float(self.cfg.get("environment",{}).get("vignetting_strength",0.0)),
+            brightness_gain=float(self.cfg.get("environment",{}).get("brightness_gain",1.0)), brightness_offset=int(self.cfg.get("environment",{}).get("brightness_offset",0)),
+            cam_type=self.cfg["camera"].get("type","monochrome"), cam_res=f"{self.cfg['camera']['resolution'][0]}×{self.cfg['camera']['resolution'][1]}", cam_fov=f"{self.cfg['camera']['fov_deg'][0]:.1f}×{self.cfg['camera']['fov_deg'][1]:.1f}", cam_fps=int(self.cfg["camera"].get("fps",30)), cam_init=self.cfg["camera"].get("initial_position","centre"),
+            tgt_type=self.cfg["target"].get("type","beacon_spot"), tgt_count=int(self.cfg["target"].get("count",1)), tgt_shape=self.cfg["target"].get("shape","square"), tgt_init=self.cfg["target"].get("initial_mode","random"),
+            max_pan=float(self.cfg["camera"].get("max_pan_speed",5.0)), max_tilt=float(self.cfg["camera"].get("max_tilt_speed",5.0)), update_hz=int(self.cfg["camera"].get("update_interval_hz",30)),
+            atmo_strength=float(self.cfg["atmosphere"].get("strength",0.0)), gauss_std=float(self.cfg["noise"].get("gaussian_std",0.0)), spp_prob=float(self.cfg["noise"].get("salt_pepper_prob",0.0)), poisson_enabled=bool(self.cfg["noise"].get("poisson", False)), platform_speed=float(self.cfg["platform"].get("speed_px_per_frame",0.0))
         )
         self.statusBar().showMessage("Reset  —  ready")
 
@@ -391,7 +399,15 @@ class MainWindow(QMainWindow):
             atmo=self.cfg["atmosphere"]["type"], noise_str=noise_label, jitter=float(self.cfg["camera"]["jitter_px"]),
             platform=self.cfg["platform"]["type"], seed=self.cfg["experiment"]["seed"],
             world_size=(self.cfg["world"]["width"], self.cfg["world"]["height"]),
-            trajectory=self.cfg["target"]["trajectory"], target_speed=float(self.cfg["target"]["speed_px_per_frame"]), target_size=int(self.cfg["target"]["size"])
+            trajectory=self.cfg["target"]["trajectory"], target_speed=float(self.cfg["target"]["speed_px_per_frame"]), target_size=int(self.cfg["target"]["size"]),
+            gradient_enabled=bool(self.cfg.get("environment",{}).get("gradient_enabled", False)), gradient_type=self.cfg.get("environment",{}).get("gradient_type","linear"),
+            stars_enabled=bool(self.cfg.get("environment",{}).get("stars_enabled", False)), stars_density=float(self.cfg.get("environment",{}).get("stars_density",0.0)), stars_brightness=int(self.cfg.get("environment",{}).get("stars_brightness",0)),
+            vignetting_enabled=bool(self.cfg.get("environment",{}).get("vignetting_enabled", False)), vignetting_strength=float(self.cfg.get("environment",{}).get("vignetting_strength",0.0)),
+            brightness_gain=float(self.cfg.get("environment",{}).get("brightness_gain",1.0)), brightness_offset=int(self.cfg.get("environment",{}).get("brightness_offset",0)),
+            cam_type=self.cfg["camera"].get("type","monochrome"), cam_res=f"{self.cfg['camera']['resolution'][0]}×{self.cfg['camera']['resolution'][1]}", cam_fov=f"{self.cfg['camera']['fov_deg'][0]:.1f}×{self.cfg['camera']['fov_deg'][1]:.1f}", cam_fps=int(self.cfg["camera"].get("fps",30)), cam_init=self.cfg["camera"].get("initial_position","centre"),
+            tgt_type=self.cfg["target"].get("type","beacon_spot"), tgt_count=int(self.cfg["target"].get("count",1)), tgt_shape=self.cfg["target"].get("shape","square"), tgt_init=self.cfg["target"].get("initial_mode","random"),
+            max_pan=float(self.cfg["camera"].get("max_pan_speed",5.0)), max_tilt=float(self.cfg["camera"].get("max_tilt_speed",5.0)), update_hz=int(self.cfg["camera"].get("update_interval_hz",30)),
+            atmo_strength=float(self.cfg["atmosphere"].get("strength",0.0)), gauss_std=float(self.cfg["noise"].get("gaussian_std",0.0)), spp_prob=float(self.cfg["noise"].get("salt_pepper_prob",0.0)), poisson_enabled=bool(self.cfg["noise"].get("poisson", False)), platform_speed=float(self.cfg["platform"].get("speed_px_per_frame",0.0))
         )
         self.last_frame = frame
         self.last_detection = detection

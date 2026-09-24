@@ -21,7 +21,11 @@ class BeaconDetector:
     def detect(self, frame_gray: np.ndarray, predicted_pos=None) -> Detection:
         if frame_gray is None or frame_gray.size==0:
             return Detection(valid=False)
-        img = frame_gray
+        # Sr.2 Camera Type: monochrome or colour — handle both
+        if len(frame_gray.shape) == 3:
+            img = cv2.cvtColor(frame_gray, cv2.COLOR_BGR2GRAY)
+        else:
+            img = frame_gray
         # preprocess: small gaussian blur
         if self.blur >= 3:
             k = self.blur if self.blur%2==1 else self.blur+1
