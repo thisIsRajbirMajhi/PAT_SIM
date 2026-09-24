@@ -1,82 +1,191 @@
-from PyQt5.QtWidgets import QWidget, QLabel, QGridLayout, QFrame, QVBoxLayout, QHBoxLayout, QProgressBar
+from PyQt5.QtWidgets import QWidget, QLabel, QGridLayout, QFrame, QVBoxLayout, QHBoxLayout, QProgressBar, QScrollArea, QSizePolicy
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
 from .theme import COLORS, STATE_COLORS
 
 
-class _Card(QFrame):
+class MetricRow(QFrame):
+    """Single metric field: left label + right value + optional unit/status dot."""
+    def __init__(self, label, parent=None, mono=True):
+        super().__init__(parent)
+        self.setStyleSheet("QFrame { border: none; }")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(6)
+        self.lbl = QLabel(label)
+        self.lbl.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px; font-weight:600;")
+        self.lbl.setMinimumWidth(108)
+        self.lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.val = QLabel("—")
+        f = "font-family:'JetBrains Mono','Consolas',monospace; font-size:13px; font-weight:700;" if mono else f"color:{COLORS['text']}; font-size:13px; font-weight:600;"
+        self.val.setStyleSheet(f"color:{COLORS['text']}; {f}")
+        self.val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.val.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.unit = QLabel("")
+        self.unit.setStyleSheet(f"color:{COLORS['subtle']}; font-size:10px;")
+        self.unit.setFixedWidth(32)
+        lay.addWidget(self.lbl, 0)
+        lay.addWidget(self.val, 1)
+        lay.addWidget(self.unit, 0)
+        # hairline separator below
+        self.setFixedHeight(22)
+
+    def set_value(self, text, color=None, tooltip=None):
+        self.val.setText(text)
+        if color:
+            self.val.setStyleSheet(f"color:{color}; font-family:'JetBrains Mono','Consolas',monospace; font-size:13px; font-weight:800;")
+        else:
+            self.val.setStyleSheet(f"color:{COLORS['text']}; font-family:'JetBrains Mono','Consolas',monospace; font-size:13px; font-weight:700;")
+        if tooltip:
+            self.setToolTip(tooltip)
+
+
+class SectionCard(QFrame):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setObjectName("Card")
         self.setStyleSheet(f"QFrame#Card {{ background:{COLORS['surface']}; border:1px solid {COLORS['border']}; border-radius:8px; }}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(3)
+        lay.setSpacing(2)
 
         head = QHBoxLayout()
         head.setSpacing(6)
         self.dot = QLabel("●")
-        self.dot.setStyleSheet(f"color:{COLORS['subtle']}; font-size: 7px;")
-        self.dot.setFixedWidth(10)
+        self.dot.setStyleSheet(f"color:{COLORS['subtle']}; font-size:10px;")
+        self.dot.setFixedWidth(12)
         t = QLabel(title)
-        t.setStyleSheet(f"color:{COLORS['muted']}; font-size:9px; font-weight:700; letter-spacing:0.7px;")
+        t.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px; font-weight:700; letter-spacing:0.7px;")
         head.addWidget(self.dot)
         head.addWidget(t)
         head.addStretch()
         self.badge = QLabel("")
-        self.badge.setStyleSheet(f"color:{COLORS['subtle']}; font-size:9px; font-weight:700;")
+        self.badge.setStyleSheet(f"color:{COLORS['subtle']}; font-size:10px; font-weight:700;")
         head.addWidget(self.badge)
         lay.addLayout(head)
 
-        self.value = QLabel("—")
-        self.value.setStyleSheet(f"color:{COLORS['text']}; font-size:14px; font-weight:800; letter-spacing:-0.2px;")
-        self.value.setWordWrap(True)
-        lay.addWidget(self.value)
+        # separator
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(f"background:{COLORS['border']}; border:none;")
+        lay.addWidget(sep)
 
-        # two secondary lines for dense metrics
-        self.sub = QLabel("")
-        self.sub.setStyleSheet(f"color:{COLORS['muted']}; font-size:10px; font-family:'JetBrains Mono','Consolas',monospace;")
-        self.sub.setWordWrap(True)
-        lay.addWidget(self.sub)
-
-        self.sub2 = QLabel("")
-        self.sub2.setStyleSheet(f"color:{COLORS['subtle']}; font-size:9px; font-family:'JetBrains Mono','Consolas',monospace;")
-        self.sub2.setWordWrap(True)
-        lay.addWidget(self.sub2)
-
-        self.bar = QProgressBar()
-        self.bar.setFixedHeight(4)
-        self.bar.setTextVisible(False)
-        self.bar.setStyleSheet(f"""
-            QProgressBar {{ background:{COLORS['faint']}; border:1px solid {COLORS['border']}; border-radius:2px; }}
-            QProgressBar::chunk {{ background:{COLORS['accent']}; border-radius:1px; }}
-        """)
-        self.bar.setMaximum(100)
-        self.bar.setValue(0)
-        self.bar.hide()
-        lay.addWidget(self.bar)
+        self.rows_lay = QVBoxLayout()
+        self.rows_lay.setSpacing(0)
+        self.rows_lay.setContentsMargins(0, 4, 0, 0)
+        lay.addLayout(self.rows_lay)
         lay.addStretch()
+
+        self.rows = {}
+
+    def add_row(self, key, label, mono=True):
+        r = MetricRow(label, mono=mono)
+        self.rows[key] = r
+        self.rows_lay.addWidget(r)
+        return r
+
+    def row(self, key):
+        return self.rows[key]
 
 
 class Dashboard(QWidget):
+    """
+    Live dashboard where EVERY required metric has its own dedicated field (MetricRow).
+    Grouped into 8 instrument sections for readability, but each metric is an isolated row
+    with label + mono value + unit, not a combined string. Covers PDF §9.1 + §28 + thresholds.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.grid = QGridLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # grid of section cards — scrollable if height is tight
+        self.grid = QGridLayout()
         self.grid.setSpacing(8)
         self.grid.setContentsMargins(0, 0, 0, 0)
 
-        # 8 cards to cover all PDF-required live metrics without crowding
-        self.c_state = _Card("Tracking  ·  Detection")
-        self.c_acc = _Card("Accuracy  ·  px / °")
-        self.c_time = _Card("Timing  ·  Throughput")
-        self.c_lock = _Card("Acquisition & Lock")
-        self.c_est = _Card("Estimator  ·  EKF-IMM")
-        self.c_ctrl = _Card("Controller  ·  Pan-Tilt")
-        self.c_env = _Card("Environment")
-        self.c_counts = _Card("Counts  ·  Frames")
+        container = QWidget()
+        container.setLayout(self.grid)
+        # we keep without scroll for now (fits 920px height with 8 cards); if needed wrap in QScrollArea later
 
-        # layout: 4 + 4
-        cards = [self.c_state, self.c_acc, self.c_time, self.c_lock, self.c_est, self.c_ctrl, self.c_env, self.c_counts]
+        # --- create sections ---
+        self.s_tracking = SectionCard("TRACKING  ·  DETECTION")
+        self.s_tracking.add_row("state", "State")
+        self.s_tracking.add_row("raw_x", "Raw centroid X", mono=True)
+        self.s_tracking.add_row("raw_y", "Raw centroid Y", mono=True)
+        self.s_tracking.add_row("fused_x", "Fused est. X", mono=True)
+        self.s_tracking.add_row("fused_y", "Fused est. Y", mono=True)
+        self.s_tracking.add_row("conf_cur", "Confidence (cur)", mono=True)
+        self.s_tracking.add_row("conf_avg", "Confidence (avg)", mono=True)
+        self.s_tracking.add_row("valid_n", "Valid detections", mono=True)
+        self.s_tracking.add_row("valid_pct", "Valid %", mono=True)
+
+        self.s_accuracy = SectionCard("ACCURACY")
+        self.s_accuracy.add_row("cur_px", "Current error", mono=True)
+        self.s_accuracy.add_row("cur_ang", "Current ang. error", mono=True)
+        self.s_accuracy.add_row("mean", "Mean error", mono=True)
+        self.s_accuracy.add_row("rmse", "RMSE", mono=True)
+        self.s_accuracy.add_row("p95", "P95 error", mono=True)
+        self.s_accuracy.add_row("mx", "Max error", mono=True)
+
+        self.s_timing = SectionCard("TIMING  ·  THROUGHPUT")
+        self.s_timing.add_row("in_fps", "Input FPS", mono=True)
+        self.s_timing.add_row("proc_fps", "Processed FPS", mono=True)
+        self.s_timing.add_row("e2e_fps", "End-to-end FPS", mono=True)
+        self.s_timing.add_row("frames", "Frame count", mono=True)
+        self.s_timing.add_row("dropped", "Dropped frames", mono=True)
+        self.s_timing.add_row("duration", "Duration", mono=True)
+        self.s_timing.add_row("lat_cur", "Latency (cur)", mono=True)
+        self.s_timing.add_row("lat_avg", "Latency (avg)", mono=True)
+        self.s_timing.add_row("lat_max", "Latency (max)", mono=True)
+
+        self.s_lock = SectionCard("ACQUISITION & LOCK")
+        self.s_lock.add_row("acq_time", "Acquisition time", mono=True)
+        self.s_lock.add_row("acq_cnt", "Acq. count", mono=True)
+        self.s_lock.add_row("reacq_last", "Re-acq last", mono=True)
+        self.s_lock.add_row("reacq_mean", "Re-acq mean", mono=True)
+        self.s_lock.add_row("reacq_max", "Re-acq max", mono=True)
+        self.s_lock.add_row("reacq_cnt", "Re-acq count", mono=True)
+        self.s_lock.add_row("lock_pct", "Lock retention", mono=True)
+        self.s_lock.add_row("loss_pct", "Target loss", mono=True)
+        self.s_lock.add_row("loss_cnt", "Loss count", mono=True)
+
+        self.s_estimator = SectionCard("ESTIMATOR  ·  EKF-IMM")
+        self.s_estimator.add_row("cv", "Model CV", mono=True)
+        self.s_estimator.add_row("ca", "Model CA", mono=True)
+        self.s_estimator.add_row("mn", "Model MN", mono=True)
+        self.s_estimator.add_row("dominant", "Dominant model", mono=True)
+        self.s_estimator.add_row("innovation", "Innovation", mono=True)
+        self.s_estimator.add_row("gate", "Gate σ", mono=True)
+
+        self.s_controller = SectionCard("CONTROLLER  ·  PAN-TILT")
+        self.s_controller.add_row("pan_rate", "Pan rate", mono=True)
+        self.s_controller.add_row("tilt_rate", "Tilt rate", mono=True)
+        self.s_controller.add_row("pan_ang", "Pan angle", mono=True)
+        self.s_controller.add_row("tilt_ang", "Tilt angle", mono=True)
+        self.s_controller.add_row("err_px", "Pixel error", mono=True)
+        self.s_controller.add_row("err_ang", "Angular error", mono=True)
+        self.s_controller.add_row("saturated", "Saturated", mono=True)
+        self.s_controller.add_row("sat_cnt", "Saturation count", mono=True)
+
+        self.s_env = SectionCard("ENVIRONMENT")
+        self.s_env.add_row("atmo", "Atmosphere", mono=True)
+        self.s_env.add_row("noise", "Noise", mono=True)
+        self.s_env.add_row("jitter", "Jitter", mono=True)
+        self.s_env.add_row("platform", "Platform", mono=True)
+        self.s_env.add_row("seed", "Seed", mono=True)
+        self.s_env.add_row("world", "World size", mono=True)
+        self.s_env.add_row("traj", "Trajectory", mono=True)
+        self.s_env.add_row("tgt_speed", "Target speed", mono=True)
+        self.s_env.add_row("tgt_size", "Target size", mono=True)
+
+        self.s_counts = SectionCard("COUNTS")
+        self.s_counts.add_row("frame_id", "Frame ID", mono=True)
+        self.s_counts.add_row("elapsed", "Elapsed", mono=True)
+
+        # layout: 4 columns × 2 rows = 8 cards
+        cards = [self.s_tracking, self.s_accuracy, self.s_timing, self.s_lock,
+                 self.s_estimator, self.s_controller, self.s_env, self.s_counts]
         for i, c in enumerate(cards):
             r = i // 4
             col = i % 4
@@ -86,125 +195,177 @@ class Dashboard(QWidget):
         self.grid.setRowStretch(0, 1)
         self.grid.setRowStretch(1, 1)
 
-    # extended signature — all live metrics from PDF §9.1 + §28
+        outer.addWidget(container)
+
     def update_metrics(self,
                        state, confidence,
-                       raw_centroid, fused_pos,          # (x,y) or None
-                       error_px, error_angle_deg,        # current
+                       raw_centroid, fused_pos,
+                       error_px, error_angle_deg,
                        mean_err, rmse, max_err, p95,
-                       # timing
                        input_fps, proc_fps, e2e_fps,
                        frame_count, dropped_frames, duration_s,
                        latency_ms, avg_proc_ms, max_proc_ms,
-                       # acquisition/lock
                        acq_time, reacq_last, reacq_mean, reacq_max, reacq_count,
                        acq_count, loss_count,
                        lock_pct, loss_pct,
                        valid_detections, valid_pct, avg_conf,
-                       # estimator
                        model_probs, innovation,
-                       # controller
                        pan_rate, tilt_rate, pan_angle, tilt_angle,
                        saturated, saturation_count,
-                       # environment
                        atmo, noise_str, jitter, platform, seed,
                        world_size, trajectory, target_speed, target_size):
-        # — Tracking & Detection —
+        # helper to format
+        def fmt(v, nd=1, unit=""):
+            if v is None:
+                return "—"
+            try:
+                return f"{v:.{nd}f}{unit}"
+            except:
+                return str(v)
+
+        # --- TRACKING ---
         col = STATE_COLORS.get(state, COLORS["muted"])
-        self.c_state.dot.setStyleSheet(f"color:{col}; font-size:8px;")
-        self.c_state.badge.setText(f"{confidence*100:.0f}%")
-        self.c_state.badge.setStyleSheet(f"color:{col}; font-size:9px; font-weight:800;")
-        self.c_state.value.setText(state)
-        self.c_state.value.setStyleSheet(f"color:{col}; font-size:14px; font-weight:800;")
-        rc = f"({raw_centroid[0]:.0f},{raw_centroid[1]:.0f})" if raw_centroid else "—"
-        fp = f"({fused_pos[0]:.0f},{fused_pos[1]:.0f})" if fused_pos else "—"
-        self.c_state.sub.setText(f"raw {rc}  →  fused {fp}")
-        self.c_state.sub2.setText(f"valid {valid_detections}  ·  {valid_pct:.1f}%  ·  avg conf {avg_conf*100:.0f}%")
-
-        # — Accuracy —
-        rmse_col = COLORS["success"] if rmse <= 10 else COLORS["danger"]
-        self.c_acc.bar.show()
-        self.c_acc.bar.setValue(int(min(100, (rmse/10)*100)))
-        self.c_acc.bar.setStyleSheet(f"""
-            QProgressBar {{ background:{COLORS['faint']}; border:1px solid {COLORS['border']}; border-radius:2px; }}
-            QProgressBar::chunk {{ background:{rmse_col}; }}
-        """)
-        cur_px = f"{error_px:.1f}px" if error_px is not None else "—"
-        cur_ang = f"{error_angle_deg:.2f}°" if error_angle_deg is not None else "—"
-        self.c_acc.value.setText(f"{cur_px}  ·  {cur_ang}")
-        self.c_acc.value.setStyleSheet(f"color:{COLORS['text']}; font-size:12px; font-weight:800;")
-        self.c_acc.badge.setText("PASS ≤10px" if rmse <= 10 else "FAIL >10px")
-        self.c_acc.badge.setStyleSheet(f"color:{rmse_col}; font-size:9px; font-weight:800;")
-        self.c_acc.sub.setText(f"mean {mean_err:.1f}  ·  RMSE {rmse:.1f}  ·  P95 {p95:.1f}")
-        self.c_acc.sub2.setText(f"max {max_err:.1f}  ·  gate 10px")
-
-        # — Timing & Throughput —
-        fps_col = COLORS["success"] if proc_fps >= 20 else COLORS["danger"]
-        self.c_time.dot.setStyleSheet(f"color:{fps_col}; font-size:8px;")
-        self.c_time.value.setText(f"{proc_fps:.1f} FPS")
-        self.c_time.badge.setText(f"{latency_ms:.1f} ms")
-        self.c_time.badge.setStyleSheet(f"color:{COLORS['muted']}; font-size:9px; font-weight:700;")
-        self.c_time.sub.setText(f"in {input_fps:.0f}  ·  proc {proc_fps:.1f}  ·  e2e {e2e_fps:.1f}")
-        self.c_time.sub2.setText(f"avg {avg_proc_ms:.1f}ms  ·  max {max_proc_ms:.1f}ms  ·  budget {1000/input_fps:.1f}ms")
-
-        # — Acquisition & Lock —
-        if acq_time is not None:
-            acq_ok = acq_time <= 2.0
-            self.c_lock.value.setText(f"Acq {acq_time:.2f}s")
-            self.c_lock.badge.setText("✓ ≤2.0s" if acq_ok else "✗ >2.0s")
-            self.c_lock.badge.setStyleSheet(f"color:{COLORS['success'] if acq_ok else COLORS['danger']}; font-size:9px; font-weight:800;")
+        self.s_tracking.dot.setStyleSheet(f"color:{col}; font-size:10px;")
+        self.s_tracking.badge.setText(f"{confidence*100:.0f}%")
+        self.s_tracking.badge.setStyleSheet(f"color:{col}; font-size:10px; font-weight:800;")
+        self.s_tracking.row("state").set_value(state, color=col)
+        if raw_centroid:
+            self.s_tracking.row("raw_x").set_value(f"{raw_centroid[0]:.1f}", tooltip="raw centroid X (px)")
+            self.s_tracking.row("raw_y").set_value(f"{raw_centroid[1]:.1f}", tooltip="raw centroid Y (px)")
+            self.s_tracking.row("raw_x").unit.setText("px")
+            self.s_tracking.row("raw_y").unit.setText("px")
         else:
-            self.c_lock.value.setText("Acq —")
-            self.c_lock.badge.setText("—")
-            self.c_lock.badge.setStyleSheet(f"color:{COLORS['muted']}; font-size:9px;")
-        reacq_txt = f"{reacq_last:.2f}s" if reacq_last is not None else "—"
-        reacq_ok = (reacq_mean is None) or (reacq_mean <= 1.0)
-        self.c_lock.sub.setText(f"re-acq last {reacq_txt}  ·  mean {(reacq_mean or 0):.2f}s  ·  max {(reacq_max or 0):.2f}s {'✓' if reacq_ok else '✗'} ≤1.0s")
-        loss_ok = loss_pct < 5
-        self.c_lock.sub2.setText(f"lock {lock_pct:.1f}%  ·  loss {loss_pct:.1f}% {'✓' if loss_ok else '✗'}<5%  ·  ×{reacq_count}")
-        self.c_lock.bar.show()
-        self.c_lock.bar.setValue(int(lock_pct))
-        self.c_lock.bar.setStyleSheet(f"""
-            QProgressBar {{ background:{COLORS['faint']}; border:1px solid {COLORS['border']}; border-radius:2px; }}
-            QProgressBar::chunk {{ background:{COLORS['success'] if loss_ok else COLORS['danger']}; }}
-        """)
+            self.s_tracking.row("raw_x").set_value("—"); self.s_tracking.row("raw_x").unit.setText("px")
+            self.s_tracking.row("raw_y").set_value("—"); self.s_tracking.row("raw_y").unit.setText("px")
+        if fused_pos:
+            self.s_tracking.row("fused_x").set_value(f"{fused_pos[0]:.1f}")
+            self.s_tracking.row("fused_y").set_value(f"{fused_pos[1]:.1f}")
+            self.s_tracking.row("fused_x").unit.setText("px")
+            self.s_tracking.row("fused_y").unit.setText("px")
+        else:
+            self.s_tracking.row("fused_x").set_value("—"); self.s_tracking.row("fused_x").unit.setText("px")
+            self.s_tracking.row("fused_y").set_value("—"); self.s_tracking.row("fused_y").unit.setText("px")
+        self.s_tracking.row("conf_cur").set_value(f"{confidence*100:.1f}", color=col)
+        self.s_tracking.row("conf_cur").unit.setText("%")
+        self.s_tracking.row("conf_avg").set_value(f"{avg_conf*100:.1f}")
+        self.s_tracking.row("conf_avg").unit.setText("%")
+        self.s_tracking.row("valid_n").set_value(f"{valid_detections}")
+        self.s_tracking.row("valid_pct").set_value(f"{valid_pct:.1f}", color=COLORS["success"] if valid_pct>90 else COLORS["muted"])
+        self.s_tracking.row("valid_pct").unit.setText("%")
 
-        # — Estimator IMM —
-        self.c_est.value.setText(f"CV {model_probs[0]:.2f}  CA {model_probs[1]:.2f}  MN {model_probs[2]:.2f}")
+        # --- ACCURACY (each own field) ---
+        cur_px_c = COLORS["text"]
+        self.s_accuracy.row("cur_px").set_value(fmt(error_px,1), color=cur_px_c)
+        self.s_accuracy.row("cur_px").unit.setText("px")
+        self.s_accuracy.row("cur_ang").set_value(fmt(error_angle_deg,2) if error_angle_deg is not None else "—", color=cur_px_c)
+        self.s_accuracy.row("cur_ang").unit.setText("°")
+        self.s_accuracy.row("mean").set_value(fmt(mean_err,1))
+        self.s_accuracy.row("mean").unit.setText("px")
+        rmse_c = COLORS["success"] if rmse <= 10 else COLORS["danger"]
+        self.s_accuracy.row("rmse").set_value(fmt(rmse,1), color=rmse_c)
+        self.s_accuracy.row("rmse").unit.setText("px")
+        self.s_accuracy.row("p95").set_value(fmt(p95,1))
+        self.s_accuracy.row("p95").unit.setText("px")
+        self.s_accuracy.row("mx").set_value(fmt(max_err,1), color=COLORS["danger"] if max_err>12 else COLORS["text"])
+        self.s_accuracy.row("mx").unit.setText("px")
+        self.s_accuracy.badge.setText("PASS ≤10px" if rmse <= 10 else "FAIL")
+        self.s_accuracy.badge.setStyleSheet(f"color:{rmse_c}; font-size:10px; font-weight:800;")
+        self.s_accuracy.dot.setStyleSheet(f"color:{rmse_c}; font-size:10px;")
+
+        # --- TIMING ---
+        fps_c = COLORS["success"] if proc_fps >= 20 else COLORS["danger"]
+        self.s_timing.dot.setStyleSheet(f"color:{fps_c}; font-size:10px;")
+        self.s_timing.row("in_fps").set_value(fmt(input_fps,1))
+        self.s_timing.row("in_fps").unit.setText("Hz")
+        self.s_timing.row("proc_fps").set_value(fmt(proc_fps,1), color=fps_c)
+        self.s_timing.row("proc_fps").unit.setText("FPS")
+        self.s_timing.row("e2e_fps").set_value(fmt(e2e_fps,1))
+        self.s_timing.row("e2e_fps").unit.setText("FPS")
+        self.s_timing.row("frames").set_value(f"{frame_count}")
+        self.s_timing.row("dropped").set_value(f"{dropped_frames}", color=COLORS["danger"] if dropped_frames>0 else COLORS["muted"])
+        self.s_timing.row("duration").set_value(fmt(duration_s,1))
+        self.s_timing.row("duration").unit.setText("s")
+        self.s_timing.row("lat_cur").set_value(fmt(latency_ms,1))
+        self.s_timing.row("lat_cur").unit.setText("ms")
+        self.s_timing.row("lat_avg").set_value(fmt(avg_proc_ms,1))
+        self.s_timing.row("lat_avg").unit.setText("ms")
+        self.s_timing.row("lat_max").set_value(fmt(max_proc_ms,1), color=COLORS["danger"] if max_proc_ms>18 else COLORS["text"])
+        self.s_timing.row("lat_max").unit.setText("ms")
+
+        # --- LOCK ---
+        if acq_time is not None:
+            acq_c = COLORS["success"] if acq_time <= 2.0 else COLORS["danger"]
+            self.s_lock.row("acq_time").set_value(fmt(acq_time,2), color=acq_c)
+            self.s_lock.row("acq_time").unit.setText("s")
+        else:
+            self.s_lock.row("acq_time").set_value("—")
+            self.s_lock.row("acq_time").unit.setText("s")
+        self.s_lock.row("acq_cnt").set_value(f"{acq_count}")
+        self.s_lock.row("reacq_last").set_value(fmt(reacq_last,2) if reacq_last is not None else "—")
+        self.s_lock.row("reacq_last").unit.setText("s")
+        reacq_c = COLORS["success"] if (reacq_mean is None or reacq_mean <= 1.0) else COLORS["danger"]
+        self.s_lock.row("reacq_mean").set_value(fmt(reacq_mean,2) if reacq_mean is not None else "—", color=reacq_c)
+        self.s_lock.row("reacq_mean").unit.setText("s")
+        self.s_lock.row("reacq_max").set_value(fmt(reacq_max,2) if reacq_max is not None else "—")
+        self.s_lock.row("reacq_max").unit.setText("s")
+        self.s_lock.row("reacq_cnt").set_value(f"{reacq_count}")
+        self.s_lock.row("lock_pct").set_value(fmt(lock_pct,1), color=COLORS["success"] if lock_pct>95 else COLORS["muted"])
+        self.s_lock.row("lock_pct").unit.setText("%")
+        loss_c = COLORS["success"] if loss_pct < 5 else COLORS["danger"]
+        self.s_lock.row("loss_pct").set_value(fmt(loss_pct,1), color=loss_c)
+        self.s_lock.row("loss_pct").unit.setText("%")
+        self.s_lock.row("loss_cnt").set_value(f"{loss_count}")
+        self.s_lock.badge.setText("✓" if loss_pct < 5 and (acq_time is None or acq_time <= 2.0) else "✗")
+        self.s_lock.badge.setStyleSheet(f"color:{COLORS['success'] if (loss_pct <5) else COLORS['danger']}; font-size:10px;")
+        self.s_lock.dot.setStyleSheet(f"color:{loss_c}; font-size:10px;")
+
+        # --- ESTIMATOR ---
+        self.s_estimator.row("cv").set_value(f"{model_probs[0]:.2f}")
+        self.s_estimator.row("ca").set_value(f"{model_probs[1]:.2f}")
+        self.s_estimator.row("mn").set_value(f"{model_probs[2]:.2f}")
         dom = max(range(3), key=lambda i: model_probs[i])
         dom_name = ["CV","CA","MN"][dom]
-        self.c_est.badge.setText(f"{dom_name} {model_probs[dom]:.2f}")
-        self.c_est.badge.setStyleSheet(f"color:{COLORS['accent']}; font-size:9px; font-weight:800;")
-        self.c_est.sub.setText(f"innovation {innovation:.1f}σ  ·  gate 5σ  ·  H tan(α)")
-        self.c_est.sub2.setText(f"state [α,β,α̇,β̇,α̈,β̈]  ·  cov tr {innovation:.1f}")
-        self.c_est.dot.setStyleSheet(f"color:{COLORS['accent'] if innovation < 12 else COLORS['warning']}; font-size:8px;")
+        self.s_estimator.row("dominant").set_value(f"{dom_name} {model_probs[dom]:.2f}", color=COLORS["accent"])
+        self.s_estimator.row("innovation").set_value(f"{innovation:.1f}", color=COLORS["warning"] if innovation>5 else COLORS["text"])
+        self.s_estimator.row("innovation").unit.setText("σ")
+        self.s_estimator.row("gate").set_value("5.0")
+        self.s_estimator.row("gate").unit.setText("σ")
+        self.s_estimator.dot.setStyleSheet(f"color:{COLORS['accent'] if innovation < 5 else COLORS['warning']}; font-size:10px;")
 
-        # — Controller —
-        sat_txt = "SAT" if saturated else "OK"
-        sat_col = COLORS["danger"] if saturated else COLORS["success"]
-        self.c_ctrl.value.setText(f"pan {pan_rate:+.1f}  tilt {tilt_rate:+.1f} °/s")
-        self.c_ctrl.badge.setText(f"{sat_txt} ×{saturation_count}")
-        self.c_ctrl.badge.setStyleSheet(f"background:{sat_col}; color:white; font-size:8px; font-weight:800; padding:1px 5px; border-radius:3px;")
-        pan_ang = f"{pan_angle:+.2f}°" if pan_angle is not None else "—"
-        tilt_ang = f"{tilt_angle:+.2f}°" if tilt_angle is not None else "—"
-        self.c_ctrl.sub.setText(f"angle {pan_ang} / {tilt_ang}  ·  err {cur_px} {cur_ang}")
-        self.c_ctrl.sub2.setText(f"deadzone 2.0px  ·  limit 5.0°/s  ·  PID Kp1.2 Ki0.05 Kd0.15")
-        self.c_ctrl.dot.setStyleSheet(f"color:{sat_col}; font-size:8px;")
+        # --- CONTROLLER ---
+        self.s_controller.row("pan_rate").set_value(f"{pan_rate:+.2f}")
+        self.s_controller.row("pan_rate").unit.setText("°/s")
+        self.s_controller.row("tilt_rate").set_value(f"{tilt_rate:+.2f}")
+        self.s_controller.row("tilt_rate").unit.setText("°/s")
+        self.s_controller.row("pan_ang").set_value(fmt(pan_angle,2) if pan_angle is not None else "—")
+        self.s_controller.row("pan_ang").unit.setText("°")
+        self.s_controller.row("tilt_ang").set_value(fmt(tilt_angle,2) if tilt_angle is not None else "—")
+        self.s_controller.row("tilt_ang").unit.setText("°")
+        self.s_controller.row("err_px").set_value(fmt(error_px,1) if error_px is not None else "—")
+        self.s_controller.row("err_px").unit.setText("px")
+        self.s_controller.row("err_ang").set_value(fmt(error_angle_deg,2) if error_angle_deg is not None else "—")
+        self.s_controller.row("err_ang").unit.setText("°")
+        sat_c = COLORS["danger"] if saturated else COLORS["success"]
+        self.s_controller.row("saturated").set_value("SAT" if saturated else "OK", color=sat_c)
+        self.s_controller.row("sat_cnt").set_value(f"{saturation_count}", color=sat_c if saturation_count>0 else COLORS["muted"])
+        self.s_controller.dot.setStyleSheet(f"color:{sat_c}; font-size:10px;")
 
-        # — Environment —
-        self.c_env.value.setText(f"{atmo}  ·  {noise_str}")
-        self.c_env.sub.setText(f"jitter ±{jitter:.0f}px  ·  plat {platform}  ·  seed {seed}")
-        self.c_env.sub2.setText(f"world {world_size[0]}×{world_size[1]}  ·  {trajectory} {target_speed:.1f}px/f  ·  sz {target_size}px")
-        self.c_env.dot.setStyleSheet(f"color:{COLORS['muted']}; font-size:8px;")
+        # --- ENVIRONMENT ---
+        self.s_env.row("atmo").set_value(atmo)
+        self.s_env.row("noise").set_value(noise_str if noise_str else "clean")
+        self.s_env.row("jitter").set_value(f"±{jitter:.0f}")
+        self.s_env.row("jitter").unit.setText("px")
+        self.s_env.row("platform").set_value(platform)
+        self.s_env.row("seed").set_value(f"{seed}")
+        self.s_env.row("world").set_value(f"{world_size[0]}×{world_size[1]}")
+        self.s_env.row("world").unit.setText("px")
+        self.s_env.row("traj").set_value(trajectory)
+        self.s_env.row("tgt_speed").set_value(f"{target_speed:.1f}")
+        self.s_env.row("tgt_speed").unit.setText("px/f")
+        self.s_env.row("tgt_size").set_value(f"{target_size}")
+        self.s_env.row("tgt_size").unit.setText("px")
 
-        # — Counts / Frames —
-        self.c_counts.value.setText(f"#{frame_count}  ·  {duration_s:.1f}s")
-        self.c_counts.badge.setText(f"drop {dropped_frames}")
-        self.c_counts.badge.setStyleSheet(f"color:{COLORS['danger'] if dropped_frames>0 else COLORS['muted']}; font-size:9px; font-weight:700;")
-        self.c_counts.sub.setText(f"acq ×{acq_count}  ·  loss ×{loss_count}  ·  re-acq ×{reacq_count}")
-        self.c_counts.sub2.setText(f"valid {valid_detections}/{frame_count}  ·  locked {lock_pct:.0f}%")
-        self.c_counts.dot.setStyleSheet(f"color:{COLORS['muted']}; font-size:8px;")
-
-    # legacy compat shim — old callers still work
-    def update_metrics_legacy(self, *a, **kw):
-        return self.update_metrics(*a, **kw)
+        # --- COUNTS ---
+        self.s_counts.row("frame_id").set_value(f"{frame_count}")
+        self.s_counts.row("elapsed").set_value(fmt(duration_s,1))
+        self.s_counts.row("elapsed").unit.setText("s")

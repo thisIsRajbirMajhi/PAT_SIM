@@ -29,7 +29,9 @@ class CameraView(QWidget):
         self._meta = {}  # fps, fov, res, etc.
         self.show_reticle = True
         self.show_grid = False
-        self.setMinimumSize(520, 380)
+        self.setMinimumSize(560, 420)
+        from PyQt5.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
 
@@ -178,18 +180,11 @@ class CameraView(QWidget):
         painter.setFont(f_title)
         painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter, self.title)
 
-        # header meta right: res / fov / fps
         meta = self._meta
-        if meta:
-            txt = f"{meta.get('res','640×480')}  •  {meta.get('fov','4.0°×3.0°')}  •  {meta.get('fps','30.0 FPS')}"
-            painter.setPen(QColor(COLORS["muted"]))
-            f_meta = QFont("Inter", 7)
-            painter.setFont(f_meta)
-            painter.drawText(header_rect.adjusted(0, 0, -10, 0), Qt.AlignVCenter | Qt.AlignRight, txt)
 
-        # image area
+        # image area — now takes full remaining height (footer/legend removed per request)
         pad = 8
-        avail = QRect(pad, header_h + pad, self.width() - pad * 2, self.height() - header_h - pad * 2 - 18)  # reserve 18 for footer
+        avail = QRect(pad, header_h + pad, self.width() - pad * 2, self.height() - header_h - pad * 2)
         scale = min(avail.width() / self._w, avail.height() / self._h)
         disp_w = int(self._w * scale)
         disp_h = int(self._h * scale)
@@ -228,7 +223,7 @@ class CameraView(QWidget):
             txt = f"x {cx:.1f}  y {cy:.1f}"
             self._draw_hud_text(painter, ox + 6, oy + disp_h - 18, txt, QColor(COLORS["text2"]), QColor(255,255,255,210))
 
-        # BR: scale bar (60px ~ 0.375° at 4°/640)
+        # BR: scale bar (60px ~ 0.375° at 4°/640) — kept as in-image HUD
         bar_px = int(60 * scale)
         bar_x = ox + disp_w - bar_px - 8
         bar_y = oy + disp_h - 8
@@ -239,19 +234,7 @@ class CameraView(QWidget):
         f_small = QFont("Inter", 6)
         painter.setFont(f_small)
         painter.drawText(QRect(bar_x - 28, bar_y - 10, 60, 10), Qt.AlignCenter, "60px")
-
-        # footer: legend
-        footer = QRect(pad, self.height() - 18, self.width() - pad*2, 14)
-        painter.setPen(QColor(COLORS["subtle"]))
-        f_leg = QFont("Inter", 6)
-        f_leg.setLetterSpacing(QFont.AbsoluteSpacing, 0.4)
-        painter.setFont(f_leg)
-        # legend items
-        legend = "—  ■ target bbox  + det centroid  ◇ est (trail)  → vel  ┼ boresight"
-        painter.drawText(footer, Qt.AlignLeft | Qt.AlignVCenter, legend)
-        # timestamp on right
-        if meta.get("ts") is not None:
-            painter.drawText(footer, Qt.AlignRight | Qt.AlignVCenter, f"t={meta['ts']:.2f}s  #{meta.get('frame_id','—')}")
+        # footer legend + timestamp removed per request
 
     def _draw_pill(self, p, rect, text, bg, fg, align_right=False, anchor_x=None, anchor_y=None):
         fm = p.fontMetrics()
@@ -297,7 +280,9 @@ class WorldView(QWidget):
         self.camera_center = (world_size[0]/2, world_size[1]/2)
         self.world_pos = None
         self.trail = []
-        self.setMinimumSize(520, 380)
+        self.setMinimumSize(560, 420)
+        from PyQt5.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
 
@@ -334,10 +319,6 @@ class WorldView(QWidget):
         f_title.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
         p.setFont(f_title)
         p.drawText(hdr.adjusted(10, 0, 0, 0), Qt.AlignVCenter, "WORLD FOV")
-        p.setPen(QColor(COLORS["muted"]))
-        f_meta = QFont("Inter", 7)
-        p.setFont(f_meta)
-        p.drawText(hdr.adjusted(0, 0, -10, 0), Qt.AlignVCenter | Qt.AlignRight, f"{self.world_w} × {self.world_h}  WORLD  •  1px = 1px")
 
         if self.camera_bounds is None:
             p.setPen(QColor(COLORS["muted"]))

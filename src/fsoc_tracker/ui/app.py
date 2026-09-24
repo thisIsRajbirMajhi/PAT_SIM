@@ -6,6 +6,7 @@ from PyQt5.QtGui import QFont
 from .theme import STYLESHEET, COLORS, STATE_COLORS
 from .viewport import CameraView, WorldView
 from .dashboard import Dashboard
+from .live_dashboard_window import LiveDashboardWindow
 from .control_deck import ControlDeck
 from ..config.loader import load_config
 from ..input.synthetic_source import SyntheticSource
@@ -27,7 +28,8 @@ class MainWindow(QMainWindow):
         self.cfg = load_config()
         self._build_ui()
         self._init_pipeline()
-        self.statusBar().showMessage("Ready  —  open Control Deck, select preset, press Run")
+        # status bar removed per request (entire section hidden)
+        self.statusBar().hide()
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -44,26 +46,22 @@ class MainWindow(QMainWindow):
         top_lay.setContentsMargins(12, 8, 12, 8)
         top_lay.setSpacing(10)
 
-        # mark
+        # Branding + seed/FPS sections removed per request — kept hidden for logic only
         self.lbl_mark = QLabel("FSOC")
-        self.lbl_mark.setStyleSheet(f"background:{COLORS['primary']}; color:white; font-size:10px; font-weight:800; letter-spacing:1.2px; padding:4px 7px; border-radius:4px;")
-        top_lay.addWidget(self.lbl_mark)
-
+        self.lbl_mark.hide()
         self.lbl_title = QLabel("Virtual Camera Tracker  ·  Coarse PAT")
-        self.lbl_title.setStyleSheet(f"color:{COLORS['text']}; font-size:12px; font-weight:700; letter-spacing:0.2px;")
-        top_lay.addWidget(self.lbl_title)
-
+        self.lbl_title.hide()
         sep = QFrame()
-        sep.setFixedSize(1, 18)
-        sep.setStyleSheet(f"background:{COLORS['border']};")
-        top_lay.addWidget(sep)
-
+        sep.hide()
         self.lbl_sub = QLabel("Synthetic scene  •  30 Hz  •  EKF-IMM-PID")
-        self.lbl_sub.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px;")
-        top_lay.addWidget(self.lbl_sub)
+        self.lbl_sub.hide()
+        self.lbl_seed_top = QLabel(f"seed {self.cfg['experiment']['seed']}")
+        self.lbl_seed_top.hide()
+        self.lbl_fps_top = QLabel("— FPS")
+        self.lbl_fps_top.hide()
         top_lay.addStretch()
 
-        # mode / state / seed / fps — tabular, muted but precise
+        # mode / state kept (seed/FPS branding removed)
         self.lbl_mode = QLabel("SYNTHETIC")
         self.lbl_mode.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['accent']}; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
         top_lay.addWidget(self.lbl_mode)
@@ -71,14 +69,6 @@ class MainWindow(QMainWindow):
         self.lbl_state_top = QLabel("IDLE")
         self.lbl_state_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['muted']}; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
         top_lay.addWidget(self.lbl_state_top)
-
-        self.lbl_seed_top = QLabel(f"seed {self.cfg['experiment']['seed']}")
-        self.lbl_seed_top.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px; font-family:'JetBrains Mono','Consolas',monospace;")
-        top_lay.addWidget(self.lbl_seed_top)
-
-        self.lbl_fps_top = QLabel("— FPS")
-        self.lbl_fps_top.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px; font-family:'JetBrains Mono','Consolas',monospace;")
-        top_lay.addWidget(self.lbl_fps_top)
 
         # actions — primary is filled slate, others are outline
         self.btn_run = QPushButton("Run")
@@ -89,21 +79,25 @@ class MainWindow(QMainWindow):
         self.btn_pause.setFixedHeight(30)
         self.btn_reset = QPushButton("Reset")
         self.btn_reset.setFixedHeight(30)
+        self.btn_dashboard = QPushButton("Live Dashboard")
+        self.btn_dashboard.setToolTip("Open dedicated live dashboard window (58 fields, PDF §9.1)")
+        self.btn_dashboard.setFixedHeight(30)
         self.btn_control = QPushButton("Control Deck")
         self.btn_control.setObjectName("Accent")
         self.btn_control.setFixedHeight(30)
 
-        for b in (self.btn_run, self.btn_pause, self.btn_reset, self.btn_control):
+        for b in (self.btn_run, self.btn_pause, self.btn_reset, self.btn_dashboard, self.btn_control):
             b.setCursor(Qt.PointingHandCursor)
 
         top_lay.addSpacing(6)
         top_lay.addWidget(self.btn_run)
         top_lay.addWidget(self.btn_pause)
         top_lay.addWidget(self.btn_reset)
+        top_lay.addWidget(self.btn_dashboard)
         top_lay.addWidget(self.btn_control)
         root.addWidget(top)
 
-        # Middle: two views
+        # Middle: two views — take ALL remaining vertical space (dashboard is now detached)
         mid = QHBoxLayout()
         mid.setSpacing(8)
         self.cam_view = CameraView("CAMERA  ·  SENSOR FEED")
@@ -112,61 +106,35 @@ class MainWindow(QMainWindow):
         mid.addWidget(self.world_view, 1)
         root.addLayout(mid, 1)
 
-        # Info strip — tabular mono, light faint bg, thin border
-        self.lbl_cam_info = QLabel("Centroid  —    Error  —    Confidence  —    Pan  —  Tilt  —")
-        self.lbl_cam_info.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['text2']}; font-size:11px; font-family:'JetBrains Mono','Consolas',monospace; padding:6px 10px; border-radius:6px;")
-        root.addWidget(self.lbl_cam_info)
+        # Live Dashboard is now in a separate window (not embedded) — see LiveDashboardWindow
+        self.live_window = LiveDashboardWindow(self)
+        self.dashboard = self.live_window.dashboard
+        self.live_window.hide()
 
-        # Dashboard
-        self.dashboard = Dashboard()
-        root.addWidget(self.dashboard)
-
-        # Bottom bar — checkboxes left, actions right, no heavy buttons
-        bottom = QFrame()
-        bottom.setObjectName("Card")
-        bot_lay = QHBoxLayout(bottom)
-        bot_lay.setContentsMargins(10, 8, 10, 8)
-        bot_lay.setSpacing(10)
-
-        self.chk_overlays = QCheckBox("Overlays")
+        # Internal flags replacing removed info strip + bottom bar (sections removed per request)
+        # Overlays/grid/debug remain functional via defaults; control via Control Deck if needed
+        self._overlays_enabled = True
+        self._grid_enabled = False
+        self._debug_gt_enabled = False
+        # keep checkbox objects hidden for internal logic compatibility (not added to layout)
+        self.chk_overlays = QCheckBox()
         self.chk_overlays.setChecked(True)
-        self.chk_grid = QCheckBox("Grid")
-        self.chk_grid.setChecked(False)
-        self.chk_debug_gt = QCheckBox("Debug ground truth")
-        # state
-        bot_lay.addWidget(self.chk_overlays)
-        bot_lay.addWidget(self.chk_grid)
-        bot_lay.addWidget(self.chk_debug_gt)
-        bot_lay.addStretch()
+        self.chk_overlays.hide()
+        self.chk_grid = QCheckBox()
+        self.chk_grid.hide()
+        self.chk_debug_gt = QCheckBox()
+        self.chk_debug_gt.hide()
+        # invisible placeholder for removed info strip (kept to avoid AttributeError if accessed)
+        self.lbl_cam_info = QLabel()
+        self.lbl_cam_info.hide()
 
-        self.btn_export = QPushButton("Export report")
-        self.btn_export.setFixedHeight(28)
-        self.btn_replay = QPushButton("Replay")
-        self.btn_replay.setFixedHeight(28)
-        self.btn_screenshot = QPushButton("Screenshot")
-        self.btn_screenshot.setFixedHeight(28)
-        self.btn_help = QPushButton("Help")
-        self.btn_help.setObjectName("Ghost")
-        self.btn_help.setFixedHeight(28)
-
-        for b in (self.btn_export, self.btn_replay, self.btn_screenshot, self.btn_help):
-            b.setCursor(Qt.PointingHandCursor)
-
-        bot_lay.addWidget(self.btn_export)
-        bot_lay.addWidget(self.btn_replay)
-        bot_lay.addWidget(self.btn_screenshot)
-        bot_lay.addWidget(self.btn_help)
-        root.addWidget(bottom)
-
-        # signals
+        # signals — bottom bar (Export/Replay/Screenshot/Help) + info strip removed per request
         self.btn_run.clicked.connect(self.start_run)
         self.btn_pause.clicked.connect(self.toggle_pause)
         self.btn_reset.clicked.connect(self.reset_run)
         self.btn_control.clicked.connect(self.open_control_deck)
-        self.btn_export.clicked.connect(self.export_report)
-        self.btn_screenshot.clicked.connect(self.screenshot)
-        self.btn_replay.clicked.connect(self.replay)
-        self.btn_help.clicked.connect(self.show_help)
+        self.btn_dashboard.clicked.connect(self.open_live_dashboard)
+        # hidden grid toggle kept for internal use
         self.chk_grid.toggled.connect(lambda v: setattr(self.cam_view, "show_grid", v) or self.cam_view.update())
 
     def _init_pipeline(self):
@@ -223,6 +191,16 @@ class MainWindow(QMainWindow):
         dlg = ControlDeck(self.cfg, self)
         dlg.configApplied.connect(self._on_config_applied)
         dlg.exec_()
+
+    def open_live_dashboard(self):
+        if not hasattr(self, "live_window") or self.live_window is None:
+            from .live_dashboard_window import LiveDashboardWindow
+            self.live_window = LiveDashboardWindow(self)
+            self.dashboard = self.live_window.dashboard
+        self.live_window.show()
+        self.live_window.raise_()
+        self.live_window.activateWindow()
+        self.statusBar().showMessage("Live Dashboard opened — 58 fields updating at 30 Hz")
 
     def _on_config_applied(self, cfg):
         self.cfg = cfg
@@ -367,20 +345,7 @@ class MainWindow(QMainWindow):
         self.lbl_state_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {col}; color:{col}; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
         self.lbl_fps_top.setText(f"{self.fps_smooth:.1f} FPS")
 
-        # info strip — tabular mono
-        centroid_str = f"({detection.centroid_px[0]:5.1f},{detection.centroid_px[1]:5.1f})" if detection.valid and detection.centroid_px else "   —   "
-        gt_str = f"({gt.image_pos[0]:5.1f},{gt.image_pos[1]:5.1f})" if gt and gt.image_pos else "   —   "
-        if detection.valid and gt and gt.image_pos and detection.centroid_px:
-            err = np.hypot(detection.centroid_px[0] - gt.image_pos[0], detection.centroid_px[1] - gt.image_pos[1])
-            err_str = f"{err:5.1f}px"
-        elif estimate.pos_px and gt and gt.image_pos:
-            err = np.hypot(estimate.pos_px[0] - gt.image_pos[0], estimate.pos_px[1] - gt.image_pos[1])
-            err_str = f"{err:5.1f}px est"
-        else:
-            err_str = "  —  "
-        # angular error from estimate
-        ang = f"α{estimate.pos_angle[0]:+.2f}° β{estimate.pos_angle[1]:+.2f}°" if estimate else "—"
-        self.lbl_cam_info.setText(f"centroid {centroid_str}  ·  GT {gt_str}  ·  err {err_str}  ·  {ang}  ·  conf {detection.confidence:.2f}  ·  {state:11s}  ·  pan {cmd.pan_rate:+5.1f}°/s  tilt {cmd.tilt_rate:+5.1f}°/s{'  SAT' if cmd.saturated else ''}")
+        # info strip removed per request (centroid/GT/err/αβ/conf/pan/tilt section)
 
         summ = self.metrics.summary()
         noise_str = []
