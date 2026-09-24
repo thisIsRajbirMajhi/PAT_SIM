@@ -8,6 +8,7 @@ from .viewport import CameraView, WorldView
 from .dashboard import Dashboard
 from .live_dashboard_window import LiveDashboardWindow
 from .control_deck import ControlDeck
+from .benchmark_dialog import BenchmarkResultDialog
 from ..config.loader import load_config
 from ..input.synthetic_source import SyntheticSource
 from ..input.video_source import VideoSource
@@ -16,6 +17,7 @@ from ..tracking.tracker import Tracker
 from ..control.camera_controller import CameraController
 from ..evaluation.metrics import MetricsCollector
 from ..evaluation.report import export_run
+from ..evaluation.auto_logger import RobustPerfLogger
 from ..common.enums import TrackingState
 
 
@@ -143,6 +145,7 @@ class MainWindow(QMainWindow):
         self.tracker = Tracker(self.cfg)
         self.controller = CameraController(self.cfg)
         self.metrics = MetricsCollector()
+        self.auto_logger = RobustPerfLogger(base_dir="outputs/runs", metrics_collector=self.metrics)
         self.timer = QTimer()
         self.timer.timeout.connect(self._tick)
         self.running = False
@@ -213,6 +216,8 @@ class MainWindow(QMainWindow):
             return
         if not self.running:
             self.metrics.start_run()
+            self.metrics.input_fps = float(self.cfg["camera"]["fps"])
+            self.auto_logger.begin_run(self.cfg)
             self.tracker.reset()
             self.controller.reset()
             if hasattr(self.source, "reset"):
@@ -227,7 +232,7 @@ class MainWindow(QMainWindow):
         self.btn_pause.setText("Pause")
         fps = max(1, int(self.cfg["camera"]["fps"]))
         self.timer.start(int(1000 / fps))
-        self.statusBar().showMessage("Running  —  tracking")
+        # status bar hidden per request — no message
 
     def toggle_pause(self):
         if not self.running:
@@ -244,6 +249,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Paused")
 
     def reset_run(self):
+        # auto-finalize any in-progress run before reset (robust)
+        if self.metrics.frames:
+            try:
+                # if timer was running, it's an abort; otherwise normal end
+                self.auto_logger.abort_run() if self.running else self.auto_logger.end_run()
+            except Exception:
+                pass
         self.timer.stop()
         self.running = False
         self.paused = False
@@ -297,7 +309,16 @@ class MainWindow(QMainWindow):
             self.running = False
             self.btn_run.setEnabled(True)
             self.btn_pause.setEnabled(False)
-            self.statusBar().showMessage("End of video / stream")
+            # auto-finalize logs on stream end (robust, atomic) + benchmark verdict
+            try:
+                self.auto_logger.end_run()
+            except Exception:
+                pass
+            # show benchmark results modal (beaten vs not beaten)
+            try:
+                self._show_benchmark_dialog()
+            except Exception:
+                pass
             return
 
         pred = self.tracker.get_predicted_pixel() if hasattr(self.tracker, "get_predicted_pixel") else None
@@ -317,8 +338,9 @@ class MainWindow(QMainWindow):
 
         input_fps = float(self.cfg["camera"]["fps"])
         self.metrics.input_fps = input_fps
-        self.metrics.update(frame.frame_id, frame.timestamp, detection.valid, estimate, gt, proc_ms, self.fps_smooth, cmd.pan_rate, cmd.tilt_rate,
-                            detection_confidence=detection.confidence, saturated=cmd.saturated, input_fps=input_fps)
+        # robust auto-logging: incremental CSV + metrics (flush every 10 frames)
+        self.auto_logger.log_frame(frame.frame_id, frame.timestamp, detection.valid, estimate, gt, proc_ms, self.fps_smooth, cmd.pan_rate, cmd.tilt_rate,
+                                   detection_confidence=detection.confidence, saturated=cmd.saturated, input_fps=input_fps)
 
         # views — pass meta for header HUD
         meta = {
@@ -418,19 +440,36 @@ class MainWindow(QMainWindow):
             self.running = False
             self.btn_run.setEnabled(True)
             self.btn_pause.setEnabled(False)
-            self.statusBar().showMessage("Run complete  —  Export report")
+            # auto-finalize logs — no manual Export needed + benchmark verdict
+            try:
+                self.auto_logger.end_run()
+            except Exception:
+                pass
+            try:
+                self._show_benchmark_dialog()
+            except Exception:
+                pass
 
     def export_report(self):
+        # Manual Export now just reveals the auto-generated run (robust logger already saved)
+        last_dir = getattr(self.auto_logger, "run_dir", None)
+        if last_dir and os.path.isdir(last_dir) and os.path.exists(os.path.join(last_dir, "summary_report.json")):
+            summ = self.metrics.summary() if self.metrics.frames else {}
+            acq = f"{summ.get('acquisition_time_s', 0):.2f}s" if summ.get('acquisition_time_s') is not None else "—"
+            rmse = summ.get('rmse_px', 0)
+            loss = summ.get('target_loss_pct', 0)
+            QMessageBox.information(self, "Auto-Generated Report", f"Performance logs auto-generated at:\n{os.path.abspath(last_dir)}\n\nRMSE {rmse:.2f}px  ·  Loss {loss:.1f}%  ·  Acq {acq}\n\nFiles: config_used.yaml, frame_metrics.csv (incremental), summary_report.json/html, events.json, plots")
+            return
         if not self.metrics.frames:
             QMessageBox.information(self, "Export", "No data to export — run a simulation first.")
             return
+        # fallback manual (if auto not yet finalized)
         ts = datetime.datetime.now().strftime("%Y-%m-%dT%H%M%SZ")
         traj = self.cfg["target"]["trajectory"]
         out = os.path.join("outputs", "runs", f"{ts}_{traj}_seed{self.cfg['experiment']['seed']}")
         summ, path = export_run(out, self.cfg, self.metrics)
         acq = f"{summ['acquisition_time_s']:.2f}s" if summ['acquisition_time_s'] is not None else "—"
         QMessageBox.information(self, "Exported", f"Report saved to:\n{os.path.abspath(path)}\n\nRMSE {summ['rmse_px']:.2f}px  ·  Loss {summ['target_loss_pct']:.1f}%  ·  Acq {acq}  ·  FPS {summ['avg_fps']:.1f}")
-        self.statusBar().showMessage(f"Report exported  —  {path}")
 
     def screenshot(self):
         if self.last_frame is None:
@@ -453,6 +492,33 @@ class MainWindow(QMainWindow):
             "3. Run — Camera: reticle=boresight, amber=bbox+centroid, green=diamond=estimate, trail=fade, arrow=velocity\n"
             "   World: amber trail = beacon, blue = camera FOV, + = boresight, scale bar = 400 px\n"
             "4. Dashboard: Tracking · Accuracy (RMSE ≤10px) · Timing (≥20 FPS) · Lock (loss <5%) · IMM (CV/CA/MN) · Controller\n"
-            "5. Export report → outputs/runs/<ts>_<traj>_seedN/ (CSV/JSON/HTML)\n\n"
+            "5. Auto-logs → outputs/runs/<ts>_<traj>_seedN/ (CSV incremental, JSON, HTML, plots) — no manual Export needed\n\n"
             "Thresholds: Acq ≤2.0s · Re-acq ≤1.0s · RMSE ≤10px · Loss <5% · FPS ≥20\n"
             "Ground truth is evaluator-only, never fed to detector/tracker/controller.")
+
+    def _show_benchmark_dialog(self):
+        # called on natural completion — shows beaten vs not-beaten with values
+        try:
+            summary = self.metrics.summary() if self.metrics.frames else {}
+            if not summary or summary.get("total_frames", 0) == 0:
+                return
+            run_dir = getattr(self.auto_logger, "run_dir", None) or getattr(self.auto_logger, "get_last_run_dir", lambda: None)()
+            # ensure summary is finalized (auto_logger already did)
+            dlg = BenchmarkResultDialog(summary, self.cfg, run_dir, self)
+            dlg.exec_()
+        except Exception as e:
+            print(f"[BenchmarkDialog] failed: {e}")
+
+    def closeEvent(self, event):
+        # robust: flush incremental logs even on abrupt close
+        try:
+            if hasattr(self, 'metrics') and self.metrics.frames:
+                self.auto_logger.abort_run()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'live_window') and self.live_window:
+                self.live_window.close()
+        except:
+            pass
+        event.accept()
