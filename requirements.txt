@@ -1,0 +1,6 @@
+numpy>=1.24
+opencv-python>=4.8
+PyQt5>=5.15
+pyqtgraph>=0.12
+PyYAML>=6.0
+pillow>=10.0

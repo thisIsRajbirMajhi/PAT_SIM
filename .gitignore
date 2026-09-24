@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+outputs/runs/*
+!outputs/runs/.gitkeep
+data/input_videos/*.mp4
+!data/input_videos/.gitkeep
+dist/
+build/
+*.egg-info/
+.pytest_cache/

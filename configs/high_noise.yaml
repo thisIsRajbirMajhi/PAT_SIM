@@ -1,0 +1,5 @@
+camera: {jitter_px: 8}
+noise: {gaussian_enabled: true, gaussian_std: 14, salt_pepper_enabled: true, salt_pepper_prob: 0.04, poisson: true}
+atmosphere: {type: haze, strength: 0.35}
+platform: {type: linear, speed_px_per_frame: 4.0}
+target: {trajectory: random, speed_px_per_frame: 4.5}
