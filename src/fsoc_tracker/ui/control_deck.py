@@ -75,37 +75,93 @@ class ControlDeck(QDialog):
         w = QWidget(); f = QFormLayout(w)
         # Target Type
         self.tgt_type_combo = QComboBox(); self.tgt_type_combo.addItems(["beacon_spot"]); self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
-        # Number of Targets 1 mandatory, 1-5 optional multiple
+        # Number of Targets 1 mandatory, 1-5 optional multiple (independent trajectories)
         self.tgt_count_spin = QSpinBox(); self.tgt_count_spin.setRange(1,5); self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
-        # Shape user-defined default Square
-        self.tgt_shape_combo = QComboBox(); self.tgt_shape_combo.addItems(["square","circle","gaussian","cross"]); self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square"))
+        # Shape user-defined default Square + custom polygon support
+        self.tgt_shape_combo = QComboBox(); self.tgt_shape_combo.addItems(["square","circle","gaussian","cross","user-defined"]); self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square"))
+        self.custom_polygon_edit = QLineEdit(); self.custom_polygon_edit.setPlaceholderText("e.g., -5,-5; 5,-5; 5,5; -5,5  or leave empty for 5-point star")
+        # Load existing custom polygon if any
+        existing_poly = self.cfg["target"].get("custom_polygon")
+        if existing_poly and isinstance(existing_poly, list):
+            self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in existing_poly]))
+        self.btn_polygon_file = QPushButton("Load Polygon File…")
+        poly_hbox = QHBoxLayout(); poly_hbox.addWidget(self.custom_polygon_edit); poly_hbox.addWidget(self.btn_polygon_file)
         # Size 5-20 default 10
         self.size_spin = QSpinBox(); self.size_spin.setRange(5,20); self.size_spin.setValue(int(self.cfg["target"]["size"]))
         # Initial Location user-defined default Random
         self.tgt_init_mode_combo = QComboBox(); self.tgt_init_mode_combo.addItems(["random","centre","user-defined"]); self.tgt_init_mode_combo.setCurrentText(self.cfg["target"].get("initial_mode","random"))
-        # if user-defined, show X/Y
         init_pos = self.cfg["target"].get("initial_pos")
         init_x = init_pos[0] if (init_pos and len(init_pos)==2) else 1000
         init_y = init_pos[1] if (init_pos and len(init_pos)==2) else 1000
         self.tgt_init_x_spin = QSpinBox(); self.tgt_init_x_spin.setRange(0,4000); self.tgt_init_x_spin.setValue(int(init_x))
         self.tgt_init_y_spin = QSpinBox(); self.tgt_init_y_spin.setRange(0,4000); self.tgt_init_y_spin.setValue(int(init_y))
-        # Motion at least 4: straight, circular, figure_eight, random + optional spiral, sinusoidal, user-defined
+        # Motion at least 4: straight, circular, figure_eight, random + optional spiral, sinusoidal, user-defined (CSV)
         self.traj_combo = QComboBox(); self.traj_combo.addItems(["straight","circular","figure_eight","random","spiral","sinusoidal","user-defined"])
         self.traj_combo.setCurrentText(self.cfg["target"]["trajectory"])
+        self.custom_traj_edit = QLineEdit(); self.custom_traj_edit.setPlaceholderText("CSV path: x,y per row  or  t,x,y")
+        self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file", ""))
+        self.btn_traj_file = QPushButton("Browse…")
+        traj_hbox = QHBoxLayout(); traj_hbox.addWidget(self.custom_traj_edit); traj_hbox.addWidget(self.btn_traj_file)
         self.speed_spin = QDoubleSpinBox(); self.speed_spin.setRange(0,20); self.speed_spin.setSingleStep(0.5); self.speed_spin.setValue(float(self.cfg["target"]["speed_px_per_frame"]))
         self.angle_spin = QDoubleSpinBox(); self.angle_spin.setRange(0,360); self.angle_spin.setValue(float(self.cfg["target"].get("angle_deg",30)))
         self.radius_spin = QDoubleSpinBox(); self.radius_spin.setRange(50,800); self.radius_spin.setValue(float(self.cfg["target"].get("radius",400)))
         f.addRow("Target Type", self.tgt_type_combo)
         f.addRow("Target Count", self.tgt_count_spin)
         f.addRow("Target Shape", self.tgt_shape_combo)
+        f.addRow("Custom Polygon", poly_hbox)
         f.addRow("Target Size", self.size_spin)
         f.addRow("Initial Position Mode", self.tgt_init_mode_combo)
         f.addRow("  Init X", self.tgt_init_x_spin); f.addRow("  Init Y", self.tgt_init_y_spin)
         f.addRow("Motion Trajectory", self.traj_combo)
+        f.addRow("Custom Trajectory CSV", traj_hbox)
         f.addRow("Speed (px/frame)", self.speed_spin)
         f.addRow("Angle (straight)", self.angle_spin)
         f.addRow("Radius (circular/8)", self.radius_spin)
+        # Show/hide custom rows based on selection
+        def _update_target_custom_rows():
+            is_user_shape = self.tgt_shape_combo.currentText() == "user-defined"
+            self.custom_polygon_edit.setVisible(is_user_shape)
+            self.btn_polygon_file.setVisible(is_user_shape)
+            is_user_traj = self.traj_combo.currentText() == "user-defined"
+            self.custom_traj_edit.setVisible(is_user_traj)
+            self.btn_traj_file.setVisible(is_user_traj)
+        self.tgt_shape_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
+        self.traj_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
+        self.btn_polygon_file.clicked.connect(self._browse_polygon)
+        self.btn_traj_file.clicked.connect(self._browse_traj)
+        _update_target_custom_rows()
         return w
+
+    def _browse_polygon(self):
+        p,_ = QFileDialog.getOpenFileName(self, "Load custom polygon (JSON or CSV: x,y per row)", "", "JSON (*.json);;CSV (*.csv);;All (*.*)")
+        if p:
+            try:
+                import json, csv, os
+                if p.lower().endswith(".json"):
+                    with open(p) as f:
+                        data = json.load(f)
+                        # expect list of [x,y]
+                        if isinstance(data, list) and len(data) > 0:
+                            self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in data]))
+                else:
+                    # CSV: x,y per row
+                    pts = []
+                    with open(p, newline='') as f:
+                        reader = csv.reader(f)
+                        for row in reader:
+                            if not row or row[0].strip().startswith('#'):
+                                continue
+                            vals = [v.strip() for v in row if v.strip()!='']
+                            if len(vals) >= 2:
+                                pts.append(f"{vals[0]},{vals[1]}")
+                    self.custom_polygon_edit.setText("; ".join(pts))
+            except Exception as e:
+                QMessageBox.warning(self, "Polygon load failed", str(e))
+
+    def _browse_traj(self):
+        p,_ = QFileDialog.getOpenFileName(self, "Load custom trajectory CSV (x,y or t,x,y per row)", "", "CSV (*.csv);;All (*.*)")
+        if p:
+            self.custom_traj_edit.setText(p)
 
     def _camera_tab(self):
         w = QWidget(); f = QFormLayout(w)
@@ -114,11 +170,11 @@ class ControlDeck(QDialog):
         # Resolution 640x480 default, 320-1920 user-defined
         self.res_w_spin = QSpinBox(); self.res_w_spin.setRange(320,1920); self.res_w_spin.setValue(int(self.cfg["camera"]["resolution"][0]))
         self.res_h_spin = QSpinBox(); self.res_h_spin.setRange(240,1080); self.res_h_spin.setValue(int(self.cfg["camera"]["resolution"][1]))
-        # FOV user-defined default 4x3, range 1-12°
+        # FOV user-defined default 4x3, range 1-12° — with live preview of footprint
         self.fov_h_spin = QDoubleSpinBox(); self.fov_h_spin.setRange(1,12); self.fov_h_spin.setValue(float(self.cfg["camera"]["fov_deg"][0]))
         self.fov_v_spin = QDoubleSpinBox(); self.fov_v_spin.setRange(1,12); self.fov_v_spin.setValue(float(self.cfg["camera"]["fov_deg"][1]))
         # Camera update Rate 30 Hz min, range 20-60
-        self.fps_spin = QSpinBox(); self.fps_spin.setRange(20,60); self.fps_spin.setValue(int(self.cfg["camera"].get("fps",30)))
+        self.fps_spin = QSpinBox(); self.fps_spin.setRange(30,60); self.fps_spin.setValue(int(self.cfg["camera"].get("fps",30)))
         # Initial Camera Position Centre (default) / user-defined
         self.cam_init_combo = QComboBox(); self.cam_init_combo.addItems(["centre","user-defined"]); self.cam_init_combo.setCurrentText(self.cfg["camera"].get("initial_position","centre"))
         self.cam_init_pan_spin = QDoubleSpinBox(); self.cam_init_pan_spin.setRange(-10,10); self.cam_init_pan_spin.setValue(float(self.cfg["camera"].get("initial_pan",0.0)))
@@ -163,8 +219,8 @@ class ControlDeck(QDialog):
         # --- World & Platform ---
         grp_world = QGroupBox("World & Platform")
         f = QFormLayout(grp_world)
-        self.world_w_spin = QSpinBox(); self.world_w_spin.setRange(1000,4000); self.world_w_spin.setValue(int(self.cfg["world"]["width"]))
-        self.world_h_spin = QSpinBox(); self.world_h_spin.setRange(1000,4000); self.world_h_spin.setValue(int(self.cfg["world"]["height"]))
+        self.world_w_spin = QSpinBox(); self.world_w_spin.setRange(2000,4000); self.world_w_spin.setValue(int(self.cfg["world"]["width"]))
+        self.world_h_spin = QSpinBox(); self.world_h_spin.setRange(2000,4000); self.world_h_spin.setValue(int(self.cfg["world"]["height"]))
         self.world_bg_spin = QSpinBox(); self.world_bg_spin.setRange(0,60); self.world_bg_spin.setValue(int(self.cfg["world"].get("background",18)))
         self.platform_combo = QComboBox(); self.platform_combo.addItems(["none","linear","circular","random","spiral","figure_of_8"])
         self.platform_combo.setCurrentText(self.cfg["platform"]["type"])
@@ -264,6 +320,12 @@ class ControlDeck(QDialog):
         h = QHBoxLayout(); h.addWidget(self.video_path_edit); h.addWidget(self.btn_browse)
         f.addRow("Input mode", self.input_combo)
         f.addRow("Video path", h)
+        # Video centre calibration (for external mp4 where image centre may be offset)
+        self.vid_centre_x_spin = QDoubleSpinBox(); self.vid_centre_x_spin.setRange(-100,100); self.vid_centre_x_spin.setSingleStep(1); self.vid_centre_x_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_x",0)))
+        self.vid_centre_y_spin = QDoubleSpinBox(); self.vid_centre_y_spin.setRange(-100,100); self.vid_centre_y_spin.setSingleStep(1); self.vid_centre_y_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_y",0)))
+        f.addRow("Video centre offset X (px)", self.vid_centre_x_spin)
+        f.addRow("Video centre offset Y (px)", self.vid_centre_y_spin)
+        f.addRow(QLabel("Calibrates image centre for mp4 input (0,0 = frame centre)"))
         self.btn_browse.clicked.connect(self._browse)
         return w
 
@@ -297,6 +359,32 @@ class ControlDeck(QDialog):
         c["target"]["speed_px_per_frame"] = float(self.speed_spin.value())
         c["target"]["angle_deg"] = float(self.angle_spin.value())
         c["target"]["radius"] = float(self.radius_spin.value())
+        # User-defined shape: custom polygon
+        if c["target"]["shape"] == "user-defined":
+            txt = self.custom_polygon_edit.text().strip()
+            if txt:
+                try:
+                    pts = []
+                    for part in txt.split(";"):
+                        part = part.strip()
+                        if not part:
+                            continue
+                        x_str, y_str = part.split(",")
+                        pts.append([int(float(x_str.strip())), int(float(y_str.strip()))])
+                    c["target"]["custom_polygon"] = pts if len(pts) >= 3 else None
+                except Exception:
+                    c["target"]["custom_polygon"] = None
+            else:
+                c["target"]["custom_polygon"] = None  # default 5-point star in World
+        else:
+            c["target"]["custom_polygon"] = None
+        # User-defined trajectory: custom CSV file
+        if c["target"]["trajectory"] == "user-defined":
+            c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None
+            c["target"]["custom_trajectory_path"] = c["target"]["custom_trajectory_file"]
+        else:
+            c["target"]["custom_trajectory_file"] = None
+            c["target"]["custom_trajectory_path"] = None
         # camera — ,13-15
         c["camera"]["type"] = self.cam_type_combo.currentText()
         c["camera"]["resolution"] = [int(self.res_w_spin.value()), int(self.res_h_spin.value())]
@@ -354,10 +442,12 @@ class ControlDeck(QDialog):
         c["noise"]["gaussian_enabled"] = bool(self.gauss_check.isChecked())
         c["noise"]["salt_pepper_enabled"] = bool(self.spp_check.isChecked())
         c["noise"]["poisson"] = bool(self.poisson_check.isChecked())
-        # input/exp
+        # input/exp + video centre calibration (for mp4 where image centre may be offset)
         c["experiment"]["seed"] = int(self.seed_spin.value())
         c["experiment"]["duration_s"] = float(self.duration_spin.value())
         c["experiment"]["input_mode"] = self.input_combo.currentText()
         c["experiment"]["video_path"] = self.video_path_edit.text().strip()
+        c["camera"]["video_centre_offset_x"] = float(self.vid_centre_x_spin.value())
+        c["camera"]["video_centre_offset_y"] = float(self.vid_centre_y_spin.value())
         self.configApplied.emit(c)
         self.accept()

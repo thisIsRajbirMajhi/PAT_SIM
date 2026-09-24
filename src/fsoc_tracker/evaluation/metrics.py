@@ -81,10 +81,14 @@ class MetricsCollector:
             self.acq_count += 1
         if prev_state == "LOCKED" and cur_state in ("TEMP_LOST","REACQUIRING","SEARCHING","FAILED"):
             self.loss_count += 1
-        # dropped frames: expected vs processed (if input_fps known)
-        # we consider dropped as 0 for synthetic where we process every frame; for video it would be input frames - processed
-        # estimate as max(0, int(duration*input_fps) - total_so_far)
-        # updated in summary
+        # dropped frames: count when processing exceeds interval (real-time drop)
+        # For synthetic: interval = 1000/input_fps ms; if proc_ms > interval, we would have dropped
+        interval_ms = 1000.0 / max(input_fps, 1)
+        if processing_ms > interval_ms * 1.05:  # 5% tolerance
+            # Estimate number of frames that would have been dropped in this tick
+            # e.g., proc 45ms at 30fps (33ms) => 1 frame dropped
+            self.dropped_frames += max(1, int(processing_ms / interval_ms))
+        # also keep expected vs processed estimate for summary fallback (updated in summary)
 
         self._last_state = estimate.tracking_state
         self.proc_times.append(processing_ms)
@@ -126,10 +130,11 @@ class MetricsCollector:
         avg_fps = float(np.mean(fps_vals)) if fps_vals else 0.0
         reacq_mean = float(np.mean(self.reacq_times)) if self.reacq_times else None
         reacq_max = float(np.max(self.reacq_times)) if self.reacq_times else None
-        # dropped frames estimate
+        # dropped frames: use incremental counter (real-time drop) + expected vs total fallback
         duration = self.frames[-1]["timestamp"]-self.frames[0]["timestamp"] if total>1 else 0
         expected = int(round(duration * self.input_fps)) if self.input_fps>0 else total
-        dropped = max(0, expected - total) if expected>total else 0
+        expected_dropped = max(0, expected - total) if expected>total else 0
+        dropped = max(int(self.dropped_frames), expected_dropped)
         # end-to-end FPS = total / duration
         e2e_fps = (total / duration) if duration>0 else avg_fps
         avg_conf = float(np.mean(self.confidences)) if self.confidences else 0.0

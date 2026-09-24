@@ -103,6 +103,60 @@ class SinusoidalTrajectory(Trajectory):
         y = self.start[1] + self.amp * math.sin(2*math.pi*t*self.speed / self.wl)
         return float(x), float(y)
 
+class UserDefinedTrajectory(Trajectory):
+    """Loads trajectory from CSV file: each row is x,y per frame. Falls back to straight if file missing."""
+    def __init__(self, csv_path=None, world_size=(2000,2000), seed=42):
+        self.world_size = world_size
+        self.points = []
+        self.csv_path = csv_path
+        if csv_path and isinstance(csv_path, str):
+            try:
+                import csv, os
+                if os.path.exists(csv_path):
+                    with open(csv_path, newline='') as f:
+                        reader = csv.reader(f)
+                        for row in reader:
+                            if not row or row[0].strip().startswith('#'):
+                                continue
+                            # support x,y or t,x,y
+                            vals = [float(v) for v in row if v.strip() != '']
+                            if len(vals) >= 2:
+                                if len(vals) == 2:
+                                    x, y = vals
+                                else:
+                                    # assume t,x,y or x,y with extra
+                                    x, y = vals[-2], vals[-1]
+                                self.points.append((float(x), float(y)))
+            except Exception as e:
+                print(f"[UserDefinedTrajectory] failed to load {csv_path}: {e}")
+        # fallback if empty: generate straight line
+        if not self.points:
+            # create a simple straight line as fallback
+            rng = np.random.default_rng(seed)
+            ws = world_size
+            init = (int(rng.integers(400, ws[0]-400)), int(rng.integers(400, ws[1]-400)))
+            # generate 1000 points along straight
+            import math
+            angle = math.radians(30)
+            dir_vec = np.array([math.cos(angle), math.sin(angle)])
+            for t in range(2000):
+                pos = np.array(init, dtype=float) + dir_vec * 3.0 * t
+                for i in range(2):
+                    if pos[i] < 50:
+                        pos[i] = 50 + (50 - pos[i]) % (world_size[i]-100)
+                    elif pos[i] > world_size[i]-50:
+                        pos[i] = world_size[i]-50 - (pos[i]-(world_size[i]-50)) % (world_size[i]-100)
+                self.points.append((float(pos[0]), float(pos[1])))
+
+    def step(self, t: float):
+        idx = int(t) % len(self.points)
+        # clamp to world bounds
+        x, y = self.points[idx]
+        # ensure within 50..world-50
+        x = float(np.clip(x, 50, self.world_size[0]-50))
+        y = float(np.clip(y, 50, self.world_size[1]-50))
+        return x, y
+
 def make_trajectory(cfg, seed=42):
     t = cfg["target"]["trajectory"]
     speed = cfg["target"]["speed_px_per_frame"]
@@ -126,5 +180,8 @@ def make_trajectory(cfg, seed=42):
         return SpiralTrajectory(center=center, speed_px_per_frame=speed)
     elif t == "sinusoidal":
         return SinusoidalTrajectory(start=init, speed_px_per_frame=speed)
+    elif t in ("user-defined", "user_defined"):
+        csv_path = cfg["target"].get("custom_trajectory_file", cfg["target"].get("custom_trajectory_path", None))
+        return UserDefinedTrajectory(csv_path=csv_path, world_size=ws, seed=seed)
     else:
         return StraightTrajectory(start=init, speed_px_per_frame=speed, world_size=ws)

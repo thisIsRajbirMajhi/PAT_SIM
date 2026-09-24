@@ -11,12 +11,10 @@ class VirtualCamera:
         self.tilt = 0.0
         self.max_pan_speed = max_pan_speed
         self.max_tilt_speed = max_tilt_speed
-        # world-to-angle scale: world width maps to ??? For simplicity, map world 2000px to FOV*? Actually we treat pan directly as world offset scaled.
-        # Define scale: 1 degree = world_px_per_deg. world center to edge ~1000px should be maybe 10 deg for maneuverability.
-        # But per spec: pixel error to angular error = e * FOV/W . So keep that.
-        # For viewport extraction, convert pan/tilt to world pixel center.
-        # 1 deg = (world visible range?) Let's define 1 deg = 250 px (so 4 deg = 1000 px viewport margin). Calibrate so pan +-4deg covers world.
-        self.px_per_deg = 220.0  # tuned so max pan speed moves reasonably
+        # world-to-angle scale: must match spec pixel→angle: HFOV/W = 4/640 = 0.00625°/px → px_per_deg = W/HFOV = 160
+        # also matches EKF fx·π/180 ≈ 160 px/deg near centre, so world shift = pan_deg * px_per_deg is consistent
+        self.px_per_deg = self.res_w / self.fov_h  # 640/4 = 160 px/deg (and res_h/fov_v = 480/3 = 160)
+        # clamp so viewport stays inside world; pan ±4° then covers ±640px, enough for 2000 world with 640 viewport
         self.world_center = np.array([world_size[0]/2, world_size[1]/2], dtype=float)
         self._update_center()
 
