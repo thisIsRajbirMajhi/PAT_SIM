@@ -1,0 +1,151 @@
+experiment:
+  seed: 24
+  duration_s: 30
+  input_mode: SYNTHETIC
+  video_path: null
+  bypass_virtual_ptz: false
+target:
+  count: 1
+  type: beacon_spot
+  shape: square
+  size: 10
+  intensity: 255
+  initial_mode: random
+  initial_pos: null
+  trajectory: figure_eight
+  custom_polygon: null
+  custom_trajectory_file: null
+  speed_px_per_frame: 3.5
+  angle_deg: 30
+  radius: 220
+camera:
+  type: monochrome
+  resolution:
+  - 640
+  - 480
+  fov_deg:
+  - 4.0
+  - 3.0
+  fps: 30
+  initial_position: centre
+  initial_pan: 0.0
+  initial_tilt: 0.0
+  max_pan_speed: 5.0
+  max_tilt_speed: 5.0
+  update_interval_hz: 30
+  jitter_px: 0.0
+  video_centre_offset_x: 0.0
+  video_centre_offset_y: 0.0
+detector:
+  threshold_k: 4.0
+  min_area: 10
+  max_area: 500
+  blur_ksize: 5
+search:
+  mode: spiral
+  roi_size: 160
+tracker:
+  lost_timeout_frames: 18
+  reacq_timeout_frames: 30
+  process_noise: 1.4
+  meas_noise: 8.0
+  gate_sigma: 6.0
+controller:
+  kp_pan: 0.9
+  kp_tilt: 0.9
+  ki: 0.03
+  kd: 0.2
+  deadzone_px: 3.0
+  integral_limit: 8.0
+world:
+  width: 2000
+  height: 2000
+  background: 18
+platform:
+  type: none
+  speed_px_per_frame: 0.0
+environment:
+  gradient_enabled: false
+  gradient_type: linear
+  gradient_top: 12
+  gradient_bottom: 24
+  gradient_angle: 90.0
+  stars_enabled: false
+  stars_density: 0.0
+  stars_brightness: 0
+  stars_min_mag: 0.0
+  stars_max_mag: 10.0
+  stars_twinkle: false
+  stars_seed: 24
+  vignetting_enabled: true
+  vignetting_strength: 0.2
+  vignetting_radius: 0.8
+  vignetting_falloff: 2.0
+  vignetting_center_x: 0.0
+  vignetting_center_y: 0.0
+  brightness_gain: 0.75
+  brightness_offset: -10
+noise:
+  gaussian_enabled: true
+  gaussian_std: 14.0
+  salt_pepper_enabled: true
+  salt_pepper_prob: 0.01
+  poisson: true
+atmosphere:
+  type: fog
+  strength: 0.35
+ai:
+  enabled: false
+  fallback_on_failure: true
+  sequence_length: 25
+  inference_timeout_ms: 40
+  candidate_model_path: null
+  identity_model_path: null
+  detection_threshold: 0.45
+  search_ranking: true
+  thresholds:
+    primary_threshold: 0.85
+    decoy_threshold: 0.85
+    confirmation_frames: 5
+    unknown_low: 0.45
+    unknown_high: 0.85
+  signatures:
+    enabled: true
+    blink_pattern: '10110010'
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    size_range_px:
+    - 5
+    - 20
+    persistence_frames: 5
+  weights:
+    appearance: 0.2
+    motion: 0.2
+    temporal: 0.2
+    signature: 0.25
+    estimator: 0.15
+primary_target:
+  optical_signature:
+    enabled: true
+    blink_pattern: '10110010'
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    size_range_px:
+    - 5
+    - 20
+    persistence_frames: 5
+decoys:
+  enabled: false
+  count: 0
+  profiles: []
+preset_meta:
+  preset: classical_high_noise
+  display_name: Classical High Noise
+  order: 20
+  system: deterministic
+  ai_mode: 'OFF'
+  purpose: Deterministic robustness profile for noise, fog and manoeuvring targets.
+  expected:
+    detector: 4σ adaptive threshold
+    noise: Gaussian + S&P + Poisson
+    ai: 'OFF'

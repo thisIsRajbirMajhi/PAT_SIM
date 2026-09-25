@@ -16,13 +16,12 @@ def test_control_deck_discovers_only_curated_presets():
     from fsoc_tracker.config.presets import discover_presets
 
     presets = discover_presets(PRESETS_DIR)
-    assert len(presets) == 4
-    assert {preset.preset_id for preset in presets} == {
-        "ai_primary_decoys",
-        "classical_baseline",
-        "ai_robustness",
-        "video_benchmark",
-    }
+    assert len(presets) == 33
+    ids = {preset.preset_id for preset in presets}
+    assert len(ids) == 33
+    assert {p.system for p in presets} == {"ai", "deterministic"}
+    assert sum(1 for p in presets if p.system == "ai") == 16
+    assert sum(1 for p in presets if p.system == "deterministic") == 17
     assert not any("P01" in preset.display_name for preset in presets)
     assert not any(os.path.basename(path).startswith("P") for path in glob.glob(os.path.join(PRESETS_DIR, "*.yaml")))
 
@@ -55,7 +54,7 @@ def test_control_deck_qdialog_instantiation_headless(qapp):
     dlg = ControlDeck(load_config())
     items = [dlg.preset_combo.itemText(i) for i in range(dlg.preset_combo.count())]
     assert items[-1] == "Custom"
-    assert len(items) == 5
+    assert len(items) == 34
     assert not any("P01" in item or "P12" in item for item in items)
     assert any("AI" in item and "Primary" in item for item in items)
     assert any("Classical" in item for item in items)
@@ -71,10 +70,39 @@ def test_control_deck_qdialog_instantiation_headless(qapp):
 @pytest.mark.parametrize(
     ("preset_id", "expected_ai", "expected_count"),
     [
-        ("ai_primary_decoys", True, 3),
+        ("ai_primary_decoys", True, 1),
         ("classical_baseline", False, 1),
-        ("ai_robustness", True, 3),
-        ("video_benchmark", False, 1),
+        ("ai_hard_negatives", True, 1),
+        ("classical_high_noise", False, 1),
+        ("ai_fast_acquisition", True, 1),
+        ("classical_video_benchmark", False, 1),
+        ("ai_circle_target", True, 1),
+        ("classical_circle_target", False, 1),
+        ("ai_gaussian_target", True, 1),
+        ("classical_gaussian_target", False, 1),
+        ("ai_cross_target", True, 1),
+        ("classical_cross_and_spiral", False, 1),
+        ("ai_random_motion", True, 1),
+        ("classical_linear_platform", False, 1),
+        ("ai_multi_target_scene", True, 5),
+        ("classical_random_platform", False, 1),
+        ("ai_signature_disabled", True, 1),
+        ("classical_spiral_platform", False, 1),
+        ("ai_model_path_test", True, 1),
+        ("classical_figure8_platform", False, 1),
+        ("ai_failure_fallback", True, 1),
+        ("classical_all_noise", False, 1),
+        ("ai_rain_low_light", True, 1),
+        ("classical_environment_full", False, 1),
+        ("ai_user_defined_geometry", True, 1),
+        ("classical_colour_camera", False, 1),
+        ("ai_platform_linear", True, 1),
+        ("classical_raster_search", False, 1),
+        ("ai_platform_spiral", True, 1),
+        ("classical_hybrid_search", False, 1),
+        ("ai_platform_figure8", True, 1),
+        ("classical_video_calibrated", False, 1),
+        ("classical_custom_geometry", False, 1),
     ],
 )
 def test_control_deck_loading_preset_preserves_ai_state(

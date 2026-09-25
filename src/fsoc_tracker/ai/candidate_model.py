@@ -22,6 +22,7 @@ Public API:
 """
 from __future__ import annotations
 
+import logging
 from typing import List, Optional, Tuple
 from pathlib import Path
 import time
@@ -29,6 +30,8 @@ import numpy as np
 
 from .types import Candidate, CandidateClass
 from .features import PATCH_SIZE
+
+logger = logging.getLogger(__name__)
 
 # Optional dependencies are loaded lazily. Importing this module must never
 # import torch/onnxruntime; those runtimes are only loaded when a model file
@@ -167,16 +170,16 @@ class CandidateClassifier:
         if self.model_path and self.model_path.endswith(".onnx"):
             ort = _load_onnxruntime()
             if ort is None:
-                print(f"[CandidateClassifier] ONNX Runtime unavailable ({self.model_path}); using heuristic.")
+                logger.warning("[CandidateClassifier] ONNX Runtime unavailable (%s); using heuristic.", self.model_path)
             else:
                 try:
                     self._ort_session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
                 except Exception as e:
-                    print(f"[CandidateClassifier] ONNX load failed ({self.model_path}): {e}; using heuristic.")
+                    logger.warning("[CandidateClassifier] ONNX load failed (%s): %s; using heuristic.", self.model_path, e)
         elif self.model_path and self.model_path.endswith((".pt", ".pth")):
             torch_deps = _load_torch()
             if torch_deps is None:
-                print(f"[CandidateClassifier] PyTorch unavailable ({self.model_path}); using heuristic.")
+                logger.warning("[CandidateClassifier] PyTorch unavailable (%s); using heuristic.", self.model_path)
             else:
                 torch, _nn = torch_deps
                 try:
@@ -189,7 +192,7 @@ class CandidateClassifier:
                     self._torch = torch
                     self._torch_model = m
                 except Exception as e:
-                    print(f"[CandidateClassifier] Torch load failed ({self.model_path}): {e}; using heuristic.")
+                    logger.warning("[CandidateClassifier] Torch load failed (%s): %s; using heuristic.", self.model_path, e)
 
     # -- single candidate -------------------------------------------------
     def _infer_heuristic(self, c: Candidate) -> Candidate:
@@ -229,7 +232,7 @@ class CandidateClassifier:
             try:
                 out.append(self._infer_one(c))
             except Exception as e:
-                print(f"[CandidateClassifier] inference error: {e}")
+                logger.warning("[CandidateClassifier] inference error: %s", e)
                 out.append(self._infer_heuristic(c))
         return out
 

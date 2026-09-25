@@ -8,20 +8,20 @@
 
 | File | Purpose |
 |------|---------|
-| `configs/presets/*.yaml` | Four curated Control Deck presets; each declares `preset_meta.system` (`ai` or `deterministic`) and `preset_meta.ai_mode` (`ON` or `OFF`). |
+| `configs/presets/*.yaml` | 33 curated Control Deck presets (16 AI + 17 deterministic); each declares `preset_meta.system` (`ai` or `deterministic`) and `preset_meta.ai_mode` (`ON` or `OFF`). |
 | `configs/benchmarks/P*.yaml` | Detailed P01–P12 benchmark/regression scenarios; not shown in the GUI selector. |
 | `src/fsoc_tracker/config/defaults.py` | `DEFAULT_CONFIG` dict — single source of truth for defaults, limits and types. |
 | `src/fsoc_tracker/config/schema.py` | `validate_config()` — asserts spec ranges, fails fast. |
 | `src/fsoc_tracker/config/loader.py` | Loads YAML, deep-merges with `DEFAULT_CONFIG`. |
 | `src/fsoc_tracker/config/presets.py` | Discovers curated GUI presets independently of other YAML files. |
 
-**Overlay pattern:** any YAML may contain only the keys to override; missing keys fall back to `DEFAULT_CONFIG`. Curated presets include explicit metadata so the Control Deck can explain their AI mode and purpose. For example, `configs/presets/03_ai_robustness.yaml` uses:
+**Overlay pattern:** any YAML may contain only the keys to override; missing keys fall back to `DEFAULT_CONFIG`. Curated presets include explicit metadata so the Control Deck can explain their AI mode and purpose. For example, `configs/presets/ai_rain_low_light.yaml` uses:
 
 ```yaml
 ai: {enabled: true}
-camera: {jitter_px: 2.0}
-noise: {gaussian_enabled: true, gaussian_std: 5.0, salt_pepper_enabled: true, salt_pepper_prob: 0.01, poisson: true}
-atmosphere: {type: haze, strength: 0.15}
+camera: {jitter_px: 0.0}
+noise: {gaussian_enabled: true, gaussian_std: 10.0, salt_pepper_enabled: true, salt_pepper_prob: 0.008, poisson: true}
+atmosphere: {type: rain, strength: 0.45}
 ```
 
 ---
@@ -226,19 +226,38 @@ controller: {kp_pan: 1.2, kp_tilt: 1.2, ki: 0.05, kd: 0.15, deadzone_px: 2.0, in
 experiment: {duration_s: 30, seed: 42, input_mode: SYNTHETIC, video_path: ""}
 ```
 
-**AI robustness preset:** `configs/presets/03_ai_robustness.yaml` keeps the identity signature and decoy profiles together with moderate disturbances. The older P01–P12 variants remain under `configs/benchmarks/` for controlled detector/tracker regression; they are not GUI presets.
+**AI hard-negatives preset:** `configs/presets/ai_hard_negatives.yaml` keeps the identity signature and three decoy profiles together with noise and haze. The older P01–P12 variants remain under `configs/benchmarks/` for controlled detector/tracker regression; they are not GUI presets.
 
 **Custom trajectory and shape:**
 
 ```yaml
 target:
   trajectory: user-defined
-  custom_trajectory_file: "data/my_path.csv"  # rows: x,y or t,x,y, # comments allowed
+  custom_trajectory_file: "trajectories/figure8_demo.json"  # CSV rows x,y or t,x,y (# comments), or JSON {"points":[{"t","x","y"}]} (relative offsets, centred on world)
   shape: user-defined
   custom_polygon: [[0,5],[2,2],[5,0],[2,-2],[0,-5],[-2,-2],[-5,0],[-2,2]]  # 8-point
 ```
 
 ---
+
+## 8. AI Subsystem (`ai.*`, `primary_target.*`, `decoys.*` — AI portion only)
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `ai.enabled` | `false` | Master switch. `true` = `AIInferencePipeline` runs (candidates → Stage-1 → tracks → Stage-2 → confirmation). `false` = pipeline returns `[]`, classical detector → EKF-IMM → PID only. Set automatically by Control Deck mode (`◉ AI System` stages `true`, Deterministic stages `false`); the `8 · AI Runtime → AI Identification Enabled` checkbox is the same flag. Switching tabs alone does nothing — press `Apply Active Mode`. |
+| `ai.candidate_model_path` | `""` | Path to Stage-1 `.onnx`/`.pt` (real name `models/candidate_classifier/candidate_model.onnx`). Empty/missing = heuristic brightness/compactness fallback (`model_version="heuristic"`). |
+| `ai.identity_model_path` | `""` | Path to Stage-2 `.onnx`/`.pt` (real name `models/identity_classifier/identity_model.onnx`). Empty/missing = heuristic temporal blink voter. |
+| `ai.inference_timeout_ms` | `40` | Hard budget per classifier before fallback (raise uncertainty, suppress PID, log; never confirm PRIMARY on failure). |
+| `ai.thresholds.primary/decoy_threshold` | `0.85/0.85` | Score needed to start confirmation. |
+| `ai.thresholds.confirmation_frames` | `5` | Consecutive frames above threshold before `PRIMARY_CONFIRMED` / `DECOY_CONFIRMED`. |
+| `ai.thresholds.unknown_low/high` | `0.45/0.85` | Below/without strong class = `UNKNOWN` / keep checking. |
+| `ai.signatures.*` | blink `10110010`, 12 Hz ±5% | Coded identity; `enabled=false` disables signature evidence. |
+
+Important: `AI ON ≠ learned models`. All shipped AI presets except `ai_model_path_test` use
+`candidate_model_path: null` / `identity_model_path: null` → heuristic mode by design.
+Wire exports after `scripts/export_models.py` to run MobileNetV3-Small + GRU (Dashboard `model_ver`
+changes from `heuristic` to the file path). `ai_model_path_test.yaml` references non-existent
+`best.onnx` — replace with `candidate_model.onnx` / `identity_model.onnx`.
 
 ## 9. Limit Enforcement and Validation
 

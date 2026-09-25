@@ -104,29 +104,63 @@ class SinusoidalTrajectory(Trajectory):
         return float(x), float(y)
 
 class UserDefinedTrajectory(Trajectory):
-    """Loads trajectory from CSV file: each row is x,y per frame. Falls back to straight if file missing."""
+    """Loads trajectory from a CSV (x,y per row) or JSON ({"points": [{"t","x","y"}]}) file.
+
+    ``csv_path`` may be absolute or relative to the process working directory
+    (repo root in normal runs). Falls back to a straight line if missing.
+    """
     def __init__(self, csv_path=None, world_size=(2000,2000), seed=42):
         self.world_size = world_size
         self.points = []
         self.csv_path = csv_path
         if csv_path and isinstance(csv_path, str):
             try:
-                import csv, os
-                if os.path.exists(csv_path):
-                    with open(csv_path, newline='') as f:
-                        reader = csv.reader(f)
-                        for row in reader:
-                            if not row or row[0].strip().startswith('#'):
-                                continue
-                            # support x,y or t,x,y
-                            vals = [float(v) for v in row if v.strip() != '']
-                            if len(vals) >= 2:
-                                if len(vals) == 2:
-                                    x, y = vals
-                                else:
-                                    # assume t,x,y or x,y with extra
-                                    x, y = vals[-2], vals[-1]
-                                self.points.append((float(x), float(y)))
+                import csv, os, json
+                resolved = csv_path
+                if not os.path.isabs(resolved) and not os.path.exists(resolved):
+                    # also try relative to the repo root (parent of src/)
+                    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+                    candidate = os.path.join(root, resolved)
+                    if os.path.exists(candidate):
+                        resolved = candidate
+                if os.path.exists(resolved):
+                    if resolved.lower().endswith(".json"):
+                        with open(resolved) as f:
+                            data = json.load(f)
+                        entries = data.get("points", []) if isinstance(data, dict) else data
+                        loaded = []
+                        for entry in entries:
+                            if isinstance(entry, dict):
+                                loaded.append((float(entry["x"]), float(entry["y"])))
+                            elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                                x, y = (entry[-2], entry[-1])
+                                loaded.append((float(x), float(y)))
+                        if loaded:
+                            # JSON assets (e.g. Resources/trajectories/figure8_demo.json)
+                            # store *relative* offsets (often centred near origin,
+                            # possibly negative). Re-centre their bounding box on
+                            # the world centre so the path plays inside the scene.
+                            xs = [p[0] for p in loaded]
+                            ys = [p[1] for p in loaded]
+                            cx = (min(xs) + max(xs)) / 2.0
+                            cy = (min(ys) + max(ys)) / 2.0
+                            base = (world_size[0] / 2.0, world_size[1] / 2.0)
+                            self.points = [(x - cx + base[0], y - cy + base[1]) for x, y in loaded]
+                    else:
+                        with open(resolved, newline='') as f:
+                            reader = csv.reader(f)
+                            for row in reader:
+                                if not row or row[0].strip().startswith('#'):
+                                    continue
+                                # support x,y or t,x,y
+                                vals = [float(v) for v in row if v.strip() != '']
+                                if len(vals) >= 2:
+                                    if len(vals) == 2:
+                                        x, y = vals
+                                    else:
+                                        # assume t,x,y or x,y with extra
+                                        x, y = vals[-2], vals[-1]
+                                    self.points.append((float(x), float(y)))
             except Exception as e:
                 print(f"[UserDefinedTrajectory] failed to load {csv_path}: {e}")
         # fallback if empty: generate straight line

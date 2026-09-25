@@ -15,12 +15,15 @@ Notes
 """
 from __future__ import annotations
 
+import logging
 from typing import Dict, Optional, Tuple
 import time
 import numpy as np
 
 from .types import IdentityResult, IdentityState, IdentityEvidence
 from .features import SEQ_LEN, EMBED_DIM
+
+logger = logging.getLogger(__name__)
 
 # Optional dependencies are loaded lazily. Importing this module must never
 # import torch/onnxruntime; those runtimes are only loaded when a model file
@@ -115,16 +118,16 @@ class IdentityClassifier:
         if self.model_path and self.model_path.endswith(".onnx"):
             ort = _load_onnxruntime()
             if ort is None:
-                print(f"[IdentityClassifier] ONNX Runtime unavailable ({self.model_path}); using heuristic.")
+                logger.warning("[IdentityClassifier] ONNX Runtime unavailable (%s); using heuristic.", self.model_path)
             else:
                 try:
                     self._ort_session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
                 except Exception as e:
-                    print(f"[IdentityClassifier] ONNX load failed: {e}")
+                    logger.warning("[IdentityClassifier] ONNX load failed: %s", e)
         elif self.model_path and self.model_path.endswith((".pt", ".pth")):
             torch_deps = _load_torch()
             if torch_deps is None:
-                print(f"[IdentityClassifier] PyTorch unavailable ({self.model_path}); using heuristic.")
+                logger.warning("[IdentityClassifier] PyTorch unavailable (%s); using heuristic.", self.model_path)
             else:
                 torch, _nn = torch_deps
                 try:
@@ -136,7 +139,7 @@ class IdentityClassifier:
                     self._torch = torch
                     self._torch_model = m
                 except Exception as e:
-                    print(f"[IdentityClassifier] Torch load failed: {e}")
+                    logger.warning("[IdentityClassifier] Torch load failed: %s", e)
 
     def predict_for_track(self, track, signature_score: float = 0.5) -> IdentityResult:
         """
@@ -175,7 +178,7 @@ class IdentityClassifier:
                 else:
                     raise TimeoutError("identity inference timeout")
             except Exception as e:
-                print(f"[IdentityClassifier] fallback voter ({e})")
+                logger.warning("[IdentityClassifier] fallback voter (%s)", e)
                 p_primary, p_decoy, p_unknown = _heuristic_identity(seq, mask, signature_score)
         else:
             p_primary, p_decoy, p_unknown = _heuristic_identity(seq, mask, signature_score)

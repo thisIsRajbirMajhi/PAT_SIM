@@ -16,8 +16,8 @@ def test_control_deck_splits_ai_and_deterministic_portions(qapp):
     dlg = ControlDeck(load_config())
     try:
         assert dlg.system_tabs.count() == 2
-        assert dlg.system_tabs.tabText(0) == "AI System"
-        assert dlg.system_tabs.tabText(1) == "Deterministic / Classical"
+        assert dlg.system_tabs.widget(0) is dlg.ai_panel
+        assert dlg.system_tabs.widget(1) is dlg.deterministic_panel
 
         ai_items = _panel_items(dlg.ai_panel)
         det_items = _panel_items(dlg.deterministic_panel)
@@ -67,9 +67,11 @@ def test_control_deck_preset_loading_preserves_inactive_portion(qapp):
         dlg.ai_panel.controls["experiment.seed"][1].setValue(777)
         dlg._apply_panel_preset("deterministic", det_info)
 
+        from fsoc_tracker.config.loader import load_config as _load
+        det_seed = _load(str(det_info.path))["experiment"]["seed"]
         assert dlg._active_system == "deterministic"
         assert dlg.cfg["ai"]["enabled"] is False
-        assert dlg.deterministic_panel.collect_config()["experiment"]["seed"] == 42
+        assert dlg.deterministic_panel.collect_config()["experiment"]["seed"] == det_seed
         assert dlg.ai_panel.controls["experiment.seed"][1].value() == 777
         assert dlg.ai_panel.collect_config()["ai"]["enabled"] is True
     finally:

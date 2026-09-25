@@ -39,13 +39,24 @@ Never treat an AI failure as PRIMARY_CONFIRMED.
 
 ## Enabling AI
 
-Set in `configs/ai.yaml`:
+Preferred: Control Deck → `◉ AI System` → §8 AI Runtime → set both model paths → `Apply Active Mode` → RUN.
+`Apply` is required — just switching tabs does not send the staged config (`control_deck.py:_apply`,
+`app.py` reads `cfg["ai"]["enabled"]` only after apply).
+
+Equivalent file edit in `configs/ai.yaml`:
 
 ```yaml
 ai:
   enabled: true
-  candidate_model_path: "models/candidate_classifier/best.onnx"
-  identity_model_path: "models/identity_classifier/best.onnx"
+  candidate_model_path: "models/candidate_classifier/candidate_model.onnx"
+  identity_model_path: "models/identity_classifier/identity_model.onnx"
 ```
 
-With `enabled: false` the system runs exactly as before (classical detector → EKF-IMM → PID).
+Notes:
+- Actual export names are `candidate_model.onnx` / `identity_model.onnx` (not `best.onnx`).
+- `ai.enabled=true` alone only activates `AIInferencePipeline`; learned MobileNetV3-Small + GRU
+  load only when both paths exist. Empty/missing path = heuristic fallback
+  (`model_version="heuristic"`), never a silent PRIMARY.
+- AI-portion checkbox `8 · AI Runtime → AI Identification Enabled` is the same `ai.enabled` flag.
+  Unchecked shows `AI OFF (staged but disabled)` even with the AI tab active.
+- Deterministic mode forces `ai.enabled=false` by design.

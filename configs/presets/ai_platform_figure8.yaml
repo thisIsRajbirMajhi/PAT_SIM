@@ -1,0 +1,150 @@
+experiment:
+  seed: 113
+  duration_s: 30
+  input_mode: SYNTHETIC
+  video_path: null
+  bypass_virtual_ptz: false
+target:
+  count: 1
+  type: beacon_spot
+  shape: square
+  size: 10
+  intensity: 255
+  initial_mode: random
+  initial_pos: null
+  trajectory: figure_eight
+  custom_polygon: null
+  custom_trajectory_file: null
+  speed_px_per_frame: 2.8
+  angle_deg: 30
+  radius: 180
+camera:
+  type: monochrome
+  resolution:
+  - 640
+  - 480
+  fov_deg:
+  - 4.0
+  - 3.0
+  fps: 30
+  initial_position: centre
+  initial_pan: 0.0
+  initial_tilt: 0.0
+  max_pan_speed: 5.0
+  max_tilt_speed: 5.0
+  update_interval_hz: 30
+  jitter_px: 0.0
+  video_centre_offset_x: 0.0
+  video_centre_offset_y: 0.0
+detector:
+  threshold_k: 3.0
+  min_area: 8
+  max_area: 900
+  blur_ksize: 3
+search:
+  mode: spiral
+  roi_size: 160
+tracker:
+  lost_timeout_frames: 15
+  reacq_timeout_frames: 30
+  process_noise: 0.8
+  meas_noise: 4.0
+  gate_sigma: 5.0
+controller:
+  kp_pan: 1.2
+  kp_tilt: 1.2
+  ki: 0.05
+  kd: 0.15
+  deadzone_px: 2.0
+  integral_limit: 8.0
+world:
+  width: 2000
+  height: 2000
+  background: 18
+platform:
+  type: figure_of_8
+  speed_px_per_frame: 2.0
+environment:
+  gradient_enabled: false
+  gradient_type: linear
+  gradient_top: 12
+  gradient_bottom: 24
+  gradient_angle: 90.0
+  stars_enabled: false
+  stars_density: 0.0
+  stars_brightness: 0
+  stars_min_mag: 0.0
+  stars_max_mag: 10.0
+  stars_twinkle: false
+  stars_seed: 113
+  vignetting_enabled: false
+  vignetting_strength: 0.0
+  vignetting_radius: 0.8
+  vignetting_falloff: 2.0
+  vignetting_center_x: 0.0
+  vignetting_center_y: 0.0
+  brightness_gain: 1.0
+  brightness_offset: 0
+noise:
+  gaussian_enabled: false
+  gaussian_std: 0.0
+  salt_pepper_enabled: false
+  salt_pepper_prob: 0.0
+  poisson: false
+atmosphere:
+  type: clear
+  strength: 0.0
+ai:
+  enabled: true
+  fallback_on_failure: true
+  sequence_length: 25
+  inference_timeout_ms: 40
+  candidate_model_path: null
+  identity_model_path: null
+  detection_threshold: 0.45
+  search_ranking: true
+  thresholds:
+    primary_threshold: 0.85
+    decoy_threshold: 0.85
+    confirmation_frames: 5
+    unknown_low: 0.45
+    unknown_high: 0.85
+  signatures:
+    enabled: true
+    blink_pattern: '10110010'
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    size_range_px:
+    - 5
+    - 20
+    persistence_frames: 5
+  weights:
+    appearance: 0.2
+    motion: 0.2
+    temporal: 0.2
+    signature: 0.25
+    estimator: 0.15
+primary_target:
+  optical_signature:
+    enabled: true
+    blink_pattern: '10110010'
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    size_range_px:
+    - 5
+    - 20
+    persistence_frames: 5
+decoys:
+  enabled: true
+  count: 2
+  profiles: []
+preset_meta:
+  preset: ai_platform_figure8
+  display_name: AI Figure-8 Platform
+  order: 52
+  system: ai
+  ai_mode: 'ON'
+  purpose: AI tracking with figure-eight platform motion.
+  expected:
+    platform: figure_of_8
+    trajectory: figure_eight

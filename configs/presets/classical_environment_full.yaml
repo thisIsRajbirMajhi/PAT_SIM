@@ -1,0 +1,152 @@
+experiment:
+  seed: 209
+  duration_s: 30
+  input_mode: SYNTHETIC
+  video_path: null
+  bypass_virtual_ptz: false
+target:
+  count: 1
+  type: beacon_spot
+  shape: square
+  size: 10
+  intensity: 255
+  initial_mode: random
+  initial_pos: null
+  trajectory: circular
+  custom_polygon: null
+  custom_trajectory_file: null
+  speed_px_per_frame: 2.8
+  angle_deg: 30
+  radius: 180
+camera:
+  type: monochrome
+  resolution:
+  - 640
+  - 480
+  fov_deg:
+  - 4.0
+  - 3.0
+  fps: 30
+  initial_position: centre
+  initial_pan: 0.0
+  initial_tilt: 0.0
+  max_pan_speed: 5.0
+  max_tilt_speed: 5.0
+  update_interval_hz: 30
+  jitter_px: 0.0
+  video_centre_offset_x: 0.0
+  video_centre_offset_y: 0.0
+detector:
+  threshold_k: 3.0
+  min_area: 8
+  max_area: 900
+  blur_ksize: 3
+search:
+  mode: spiral
+  roi_size: 160
+tracker:
+  lost_timeout_frames: 15
+  reacq_timeout_frames: 30
+  process_noise: 0.8
+  meas_noise: 4.0
+  gate_sigma: 5.0
+controller:
+  kp_pan: 1.2
+  kp_tilt: 1.2
+  ki: 0.05
+  kd: 0.15
+  deadzone_px: 2.0
+  integral_limit: 8.0
+world:
+  width: 2000
+  height: 2000
+  background: 18
+platform:
+  type: none
+  speed_px_per_frame: 0.0
+environment:
+  gradient_enabled: true
+  gradient_type: radial
+  gradient_top: 5
+  gradient_bottom: 30
+  gradient_angle: 180
+  stars_enabled: true
+  stars_density: 0.03
+  stars_brightness: 120
+  stars_min_mag: -1
+  stars_max_mag: 8
+  stars_twinkle: true
+  stars_seed: 209
+  vignetting_enabled: true
+  vignetting_strength: 0.45
+  vignetting_radius: 0.75
+  vignetting_falloff: 3.0
+  vignetting_center_x: 0.1
+  vignetting_center_y: -0.1
+  brightness_gain: 1.2
+  brightness_offset: 12
+noise:
+  gaussian_enabled: false
+  gaussian_std: 0.0
+  salt_pepper_enabled: false
+  salt_pepper_prob: 0.0
+  poisson: false
+atmosphere:
+  type: clear
+  strength: 0.0
+ai:
+  enabled: false
+  fallback_on_failure: true
+  sequence_length: 25
+  inference_timeout_ms: 40
+  candidate_model_path: null
+  identity_model_path: null
+  detection_threshold: 0.45
+  search_ranking: true
+  thresholds:
+    primary_threshold: 0.85
+    decoy_threshold: 0.85
+    confirmation_frames: 5
+    unknown_low: 0.45
+    unknown_high: 0.85
+  signatures:
+    enabled: true
+    blink_pattern: '10110010'
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    size_range_px:
+    - 5
+    - 20
+    persistence_frames: 5
+  weights:
+    appearance: 0.2
+    motion: 0.2
+    temporal: 0.2
+    signature: 0.25
+    estimator: 0.15
+primary_target:
+  optical_signature:
+    enabled: true
+    blink_pattern: '10110010'
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    size_range_px:
+    - 5
+    - 20
+    persistence_frames: 5
+decoys:
+  enabled: false
+  count: 0
+  profiles: []
+preset_meta:
+  preset: classical_environment_full
+  display_name: Classical Environment Full
+  order: 48
+  system: deterministic
+  ai_mode: 'OFF'
+  purpose: All environment presentation controls enabled for rendering QA.
+  expected:
+    gradient: radial ON
+    stars: ON + twinkle
+    vignetting: 'ON'
+    brightness: custom

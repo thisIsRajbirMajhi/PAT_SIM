@@ -58,12 +58,13 @@ class TrackManager:
         track_ids = list(self.tracks.keys())
         track_centroids = [self.tracks[tid].position_history[-1] if self.tracks[tid].position_history else None for tid in track_ids]
 
-        # greedy association: each candidate assigned to nearest track within gate
+        # greedy association: highest-confidence candidates claim tracks first,
+        # each bound to its nearest unassigned track within gate
         assigned_candidates = set()
         assigned_tracks = set()
 
-        # for each candidate, find nearest unassigned track
-        for c in candidates:
+        # for each candidate (best first), find nearest unassigned track
+        for c in sorted(candidates, key=lambda k: k.beacon_probability, reverse=True):
             best_tid = None
             best_dist = self.gate_px
             for tid, tcent in zip(track_ids, track_centroids):

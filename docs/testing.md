@@ -218,7 +218,7 @@ cases = list(itertools.product(
     [0, 8],           # jitter
 ))
 for std, sp, atmo, jit in cases:
-    cfg = load_config("configs/presets/02_classical_baseline.yaml")
+    cfg = load_config("configs/presets/classical_baseline.yaml")
     cfg["noise"]["gaussian_std"] = std
     cfg["noise"]["salt_pepper_prob"] = sp
     cfg["atmosphere"]["type"] = atmo

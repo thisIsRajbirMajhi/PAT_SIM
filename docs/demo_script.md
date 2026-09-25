@@ -215,7 +215,7 @@ Thank the audience. Leave the exported `summary_report.html` and `config_used.ya
 - [ ] The running application (or installed exe) in the demo window.
 - [ ] The exported `outputs/runs/<timestamp>_<traj>_seedN/` folder with `config_used.yaml`, `summary_report.html` and `frame_metrics.csv` on screen.
 - [ ] `docs/` folder (architecture, algorithms, configuration, testing, technical_report, user_manual, this script).
-- [ ] The four curated files under `configs/presets/` are available, and the P01–P12 suite is under `configs/benchmarks/`.
+- [ ] The 33 curated files under `configs/presets/` are available, and the P01–P12 suite is under `configs/benchmarks/`.
 - [ ] Optional 3-5 min screen recording of the same flow (as `data/demo_recording.mp4`, not in git if large).
 
 ---

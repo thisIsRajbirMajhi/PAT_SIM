@@ -1,4 +1,4 @@
-import time, os, datetime, numpy as np, cv2
+import time, os, datetime, logging, numpy as np, cv2
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame,
                              QMessageBox, QFileDialog, QGridLayout, QCheckBox)
 from PyQt5.QtCore import QTimer, Qt
@@ -26,6 +26,9 @@ from ..common.types import Detection
 from ..ai.inference import AIInferencePipeline
 from ..ai.types import IdentityState as AIIdentityState
 from ..ai.signatures import signature_score, SignatureConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -252,7 +255,7 @@ class MainWindow(QMainWindow):
             if not ai_on:
                 self.tracks_view.clear()
         except Exception as exc:
-            print(f"[UI] Could not update target-track visibility: {exc}")
+            logger.warning("[UI] Could not update target-track visibility: %s", exc)
         self._create_source()
         self.reset_run()
         self.statusBar().showMessage(f"Configuration applied — AI {'ON' if ai_on else 'OFF'} — ready to Run")
@@ -406,13 +409,13 @@ class MainWindow(QMainWindow):
             try:
                 candidates = self.ai_pipeline.candidate_clf.predict(candidates)
             except Exception as e:
-                print(f"[AI] candidate clf fallback: {e}")
+                logger.warning("[AI] candidate clf fallback: %s", e)
             self._ai_candidates = list(candidates)
             # track management (nearest-neighbor gating, decoy memory)
             try:
                 tracks = self.track_manager.update(candidates, frame.frame_id, innovation=float(self.tracker.imm.last_nis), imm_probs=tuple(self.tracker.imm.probs))
             except Exception as e:
-                print(f"[AI] track_manager error: {e}")
+                logger.warning("[AI] track_manager error: %s", e)
                 tracks = dict(self.track_manager.tracks)
             self._ai_tracks = dict(tracks)
             # Stage-2 identity per track (+ temporal confirmation)
@@ -617,7 +620,7 @@ class MainWindow(QMainWindow):
             elif hasattr(self, 'tracks_view'):
                 self.tracks_view.clear()
         except Exception as e:
-            print(f"[TracksView] update failed: {e}")
+            logger.warning("[TracksView] update failed: %s", e)
 
         # top bar state — AI-aware labels per Plan §16.2 (never bare LOCKED for unconfirmed)
         if ai_enabled:
@@ -835,7 +838,7 @@ class MainWindow(QMainWindow):
             dlg = BenchmarkResultDialog(summary, self.cfg, run_dir, self)
             dlg.exec_()
         except Exception as e:
-            print(f"[BenchmarkDialog] failed: {e}")
+            logger.warning("[BenchmarkDialog] failed: %s", e)
 
     def closeEvent(self, event):
         # robust: flush incremental logs even on abrupt close

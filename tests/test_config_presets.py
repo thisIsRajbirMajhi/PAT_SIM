@@ -137,15 +137,46 @@ def test_save_and_reload_roundtrip(tmp_path):
     assert reloaded["experiment"]["seed"] == 12345
 
 
-def test_curated_gui_presets_are_exactly_four_and_declare_ai_mode():
+def test_curated_gui_presets_are_thirty_three_and_declare_system():
     presets = discover_presets(PRESETS_DIR)
     assert [preset.preset_id for preset in presets] == [
         "ai_primary_decoys",
         "classical_baseline",
-        "ai_robustness",
-        "video_benchmark",
+        "ai_hard_negatives",
+        "classical_high_noise",
+        "ai_fast_acquisition",
+        "classical_video_benchmark",
+        "ai_circle_target",
+        "classical_circle_target",
+        "ai_gaussian_target",
+        "classical_gaussian_target",
+        "ai_cross_target",
+        "classical_cross_and_spiral",
+        "ai_random_motion",
+        "classical_linear_platform",
+        "ai_multi_target_scene",
+        "classical_random_platform",
+        "ai_signature_disabled",
+        "classical_spiral_platform",
+        "ai_model_path_test",
+        "classical_figure8_platform",
+        "ai_failure_fallback",
+        "classical_all_noise",
+        "ai_rain_low_light",
+        "classical_environment_full",
+        "ai_user_defined_geometry",
+        "classical_colour_camera",
+        "ai_platform_linear",
+        "classical_raster_search",
+        "ai_platform_spiral",
+        "classical_hybrid_search",
+        "ai_platform_figure8",
+        "classical_video_calibrated",
+        "classical_custom_geometry",
     ]
-    assert [preset.ai_mode for preset in presets] == ["ON", "OFF", "ON", "OFF"]
+    systems = [preset.system for preset in presets]
+    assert systems.count("ai") == 16
+    assert systems.count("deterministic") == 17
     for preset in presets:
         assert os.path.exists(preset.path)
         cfg = load_config(str(preset.path))
@@ -155,17 +186,17 @@ def test_curated_gui_presets_are_exactly_four_and_declare_ai_mode():
 
 
 def test_curated_preset_metadata_and_targets():
-    ai = load_config(os.path.join(PRESETS_DIR, "01_ai_primary_decoys.yaml"))
-    assert ai["target"]["count"] == 3
+    ai = load_config(os.path.join(PRESETS_DIR, "ai_primary_decoys.yaml"))
+    assert ai["target"]["count"] == 1
     assert ai["ai"]["enabled"] is True
     assert len(ai["decoys"]["profiles"]) == 2
-    classical = load_config(os.path.join(PRESETS_DIR, "02_classical_baseline.yaml"))
+    classical = load_config(os.path.join(PRESETS_DIR, "classical_baseline.yaml"))
     assert classical["target"]["count"] == 1
     assert classical["ai"]["enabled"] is False
-    robustness = load_config(os.path.join(PRESETS_DIR, "03_ai_robustness.yaml"))
-    assert robustness["ai"]["enabled"] is True
-    assert robustness["camera"]["jitter_px"] > 0
-    assert robustness["noise"]["gaussian_enabled"] is True
+    noisy = load_config(os.path.join(PRESETS_DIR, "classical_high_noise.yaml"))
+    assert noisy["ai"]["enabled"] is False
+    assert noisy["noise"]["gaussian_enabled"] is True
+    assert noisy["atmosphere"]["type"] == "fog"
 
 
 def test_benchmark_files_are_not_gui_presets():

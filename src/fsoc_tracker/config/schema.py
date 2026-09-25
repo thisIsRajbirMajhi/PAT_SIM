@@ -17,7 +17,7 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     assert 20 <= cfg["camera"].get("update_interval_hz", cfg["camera"]["fps"]) <= 60, "Update Interval ≥20 Hz"
 
     # -- Target Parameters --
-    assert cfg["target"]["type"] in ("beacon_spot", "beacon", "spot"), "Beacon Spot"
+    assert cfg["target"]["type"] in ("beacon_spot", "beacon", "spot", "point", "extended", "custom"), "Target type must be beacon_spot|point|extended|custom"
     assert 1 <= cfg["target"]["count"] <= 5, "Number of Targets 1-5 (1 mandatory)"
     assert cfg["target"]["shape"] in ("square", "circle", "gaussian", "cross", "user-defined", "user_defined"), "Shape square default + user-defined"
     assert 5 <= cfg["target"]["size"] <= 20, "Target Size 5-20 px"

@@ -252,7 +252,9 @@ Thresholds (spec section 9): acquisition <= 2 s, reacq <= 1 s, RMSE <= 10 px, lo
 
 ## 10. Control Deck — AI and Deterministic Portions
 
-Click **CONTROL DECK** to open/close the drawer (right side, slides over the view without closing it). The dialog has two top-level portions: **AI System** and **Deterministic / Classical**. Each portion stages a complete, independent parameter set; switching portions does not overwrite the other portion. Click **Apply Active Portion** to send only the visible portion to the simulator. Parameters that would invalidate a run become read-only while `RUNNING`.
+Click **CONTROL DECK** to open/close the drawer (right side, slides over the view without closing it). The dialog has two top-level portions: **AI System** and **Deterministic / Classical**. Each portion stages a complete, independent parameter set; switching portions does not overwrite the other portion. Click **Apply Active Mode** to send only the visible portion to the simulator — switching tabs alone stages but does not apply (runtime `ai.enabled` changes only after Apply). Parameters that would invalidate a run become read-only while `RUNNING`.
+
+AI mode vs learned models: selecting `◉ AI System` + Apply sets `ai.enabled=true` (pipeline on). Learned MobileNetV3-Small + GRU run only when §8 AI Runtime model paths point at real `models/*/candidate_model.onnx` + `identity_model.onnx` files; empty path = heuristic fallback (`model_ver=heuristic` in Dashboard). Keep `8 · AI Runtime → AI Identification Enabled` checked — unchecked shows `AI OFF (staged but disabled)` even with the AI tab active.
 
 Inline validation: invalid values are highlighted beside the field (range, type) before a run can start, using `config/schema.py`.
 
@@ -449,14 +451,15 @@ A metric turning red in the Dashboard indicates a spec violation for that run; t
 
 ### Curated GUI presets
 
-The four maintained GUI overlays are in `configs/presets/`:
+The 33 maintained GUI presets (16 AI + 17 deterministic) are in `configs/presets/`. The full list with purposes is in `Resources/PRESET_COVERAGE.json`. Key examples:
 
 | File | AI mode | Purpose |
 |------|---------|---------|
-| `01_ai_primary_decoys.yaml` | ON | Primary + two decoys, coded identity demonstration |
-| `02_classical_baseline.yaml` | OFF | Clean single-target classical regression |
-| `03_ai_robustness.yaml` | ON | Moderate disturbance and decoy stress test |
-| `04_video_benchmark.yaml` | OFF | External MP4 ingestion benchmark |
+| `ai_primary_decoys.yaml` | ON | Primary + two decoys, coded identity demonstration |
+| `classical_baseline.yaml` | OFF | Clean single-target classical regression |
+| `ai_hard_negatives.yaml` | ON | Noisy scene with three difficult decoys |
+| `classical_high_noise.yaml` | OFF | Gaussian + impulse + shot noise with fog |
+| `classical_video_benchmark.yaml` | OFF | External MP4 ingestion benchmark |
 
 The detailed P01–P12 scenarios are benchmark-only files under `configs/benchmarks/`; they are not selectable in the Control Deck.
 
@@ -483,9 +486,9 @@ controller: {kp_pan: 1.2, kp_tilt: 1.2, ki: 0.05, kd: 0.15,
 experiment: {duration_s: 30, seed: 42, input_mode: SYNTHETIC, video_path: ""}
 ```
 
-### AI robustness preset
+### AI hard-negatives preset
 
-`configs/presets/03_ai_robustness.yaml` adds moderate combined disturbances to the coded primary/decoy scenario while keeping the AI safety threshold at five consistent observations.
+`configs/presets/ai_hard_negatives.yaml` stresses identity confirmation with a noisy scene and three difficult decoys while keeping strict confirmation (0.90 over seven consistent observations).
 
 ### Custom trajectory and shape
 

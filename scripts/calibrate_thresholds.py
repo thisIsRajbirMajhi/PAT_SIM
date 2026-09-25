@@ -57,6 +57,22 @@ def main():
            "val_false_lock_rate": result["val_false_lock_rate"], "calibrated_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime())}
     yaml.safe_dump(out, open(thr_out,"w"), sort_keys=False)
     print(f"[calibrate_thresholds] wrote {thr_out}")
+    # wire the calibrated identity thresholds back into the runtime config
+    # (configs/ai.yaml is the live source; model_thresholds.yaml is the record)
+    try:
+        ai_path = pathlib.Path("configs/ai.yaml")
+        if ai_path.exists():
+            ai_cfg = yaml.safe_load(open(ai_path)) or {}
+            thr = ai_cfg.setdefault("ai", {}).setdefault("thresholds", {})
+            thr["primary_threshold"] = float(result["primary_threshold"])
+            thr["decoy_threshold"] = float(result["decoy_threshold"])
+            thr["confirmation_frames"] = int(result["confirmation_frames"])
+            yaml.safe_dump(ai_cfg, open(ai_path, "w"), sort_keys=False)
+            print(f"[calibrate_thresholds] updated ai.yaml thresholds "
+                  f"(primary={result['primary_threshold']}, decoy={result['decoy_threshold']}, "
+                  f"confirm={result['confirmation_frames']})")
+    except Exception as e:
+        print(f"[calibrate_thresholds] WARNING: could not update ai.yaml: {e}")
 
 
 if __name__ == "__main__":

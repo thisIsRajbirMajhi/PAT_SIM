@@ -314,8 +314,14 @@ class World:
         # draw beacon(s) — support count (independent trajectories Sr.8) & shape Sr.9 (including user-defined)
         count = int(self.cfg["target"].get("count", 1))
         shape = self.cfg["target"].get("shape", "square")
+        tgt_type = str(self.cfg["target"].get("type", "beacon_spot")).lower()
         s = self.target_size
         half = s//2
+        # target type modulates the rendered spot (informational selector made observable):
+        # point = compact dot, extended = large diffuse spot, others = nominal size
+        type_size_scale = {"point": 0.5, "extended": 2.0}.get(tgt_type, 1.0)
+        half = max(1, int(round(half * type_size_scale)))
+        diffuse = (tgt_type == "extended")
         # Build list of positions: use independent trajectories if available
         if hasattr(self, 'all_world_pos') and len(self.all_world_pos) >= count and world_pos == self.world_pos:
             # Use independent positions for primary rendering (primary is world_pos, others from all_world_pos)
@@ -359,18 +365,23 @@ class World:
                 except Exception:
                     pass
             # glow - supports square, circle, gaussian, cross, user-defined (Sr.9)
+            # extended type doubles the halo for a diffuse appearance
+            mult = 2 if diffuse else 1
             if shape == "circle":
-                cv2.circle(img, (x, y), half+2, int(self.bg+45), -1)
+                cv2.circle(img, (x, y), (half+2)*mult, int(self.bg+45), -1)
             elif shape == "gaussian":
-                cv2.circle(img, (x, y), half+3, int(self.bg+35), -1)
+                cv2.circle(img, (x, y), (half+3)*mult, int(self.bg+35), -1)
             elif shape == "cross":
-                cv2.rectangle(img, (x-half-1, y-1), (x+half+1, y+1), int(self.bg+45), -1)
-                cv2.rectangle(img, (x-1, y-half-1), (x+1, y+half+1), int(self.bg+45), -1)
+                cv2.rectangle(img, (x-(half+1)*mult, y-1), (x+(half+1)*mult, y+1), int(self.bg+45), -1)
+                cv2.rectangle(img, (x-1, y-(half+1)*mult), (x+1, y+(half+1)*mult), int(self.bg+45), -1)
             elif shape == "user-defined":
-                pts = self._get_user_polygon(x, y, half+2)
+                pts = self._get_user_polygon(x, y, (half+2)*mult)
                 cv2.fillPoly(img, [pts], int(self.bg+45))
             else: # square
-                cv2.rectangle(img, (x-half-1, y-half-1), (x+half+1, y+half+1), int(self.bg+45), -1)
+                if diffuse:
+                    cv2.rectangle(img, (x-half*2, y-half*2), (x+half*2, y+half*2), int(self.bg+45), -1)
+                else:
+                    cv2.rectangle(img, (x-half-1, y-half-1), (x+half+1, y+half+1), int(self.bg+45), -1)
             # core - supports all shapes including user-defined polygon
             if shape == "circle":
                 cv2.circle(img, (x, y), half, int(cur_intensity), -1)

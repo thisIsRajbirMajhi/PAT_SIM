@@ -31,6 +31,9 @@ class IdentityStateMachine:
         self.primary_thr = float(thr.get("primary_threshold", 0.85))
         self.decoy_thr = float(thr.get("decoy_threshold", 0.85))
         self.confirm_frames = int(thr.get("confirmation_frames", 5))
+        # UNKNOWN band knobs (defaults preserve the tuned 0.52/0.55 behavior)
+        self.unknown_low = float(thr.get("unknown_low", 0.52))
+        self.unknown_high = float(thr.get("unknown_high", 0.55))
         # per-track counters
         self._primary_streak: dict[int, int] = {}
         self._decoy_streak: dict[int, int] = {}
@@ -74,7 +77,7 @@ class IdentityStateMachine:
             self._state[track_id] = IdentityState.PRIMARY_CONFIRMED
         elif self._decoy_streak[track_id] >= self.confirm_frames:
             self._state[track_id] = IdentityState.DECOY_CONFIRMED
-        elif max(primary_p, decoy_p, unknown_p) < 0.52 or unknown_p >= 0.55:
+        elif max(primary_p, decoy_p, unknown_p) < self.unknown_low or unknown_p >= self.unknown_high:
             self._state[track_id] = IdentityState.UNKNOWN
         elif self._state[track_id] == IdentityState.PRIMARY_CONFIRMED:
             # demote stale primary when evidence drops (prevents locked-on ghost)

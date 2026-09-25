@@ -18,6 +18,18 @@ Camera frame
 
 AI provides evidence and confidence; explicit state logic, EKF-IMM and bounded PID keep the system stable and explainable.
 
+## AI ON vs learned weights
+
+- `ai.enabled=true` (Control Deck `◉ AI System` + `Apply Active Mode`) only starts `AIInferencePipeline`.
+- `CandidateClassifier` / `IdentityClassifier` load learned weights only when
+  `ai.candidate_model_path` / `ai.identity_model_path` point at existing `.onnx`/`.pt`
+  files (`models/candidate_classifier/candidate_model.onnx`,
+  `models/identity_classifier/identity_model.onnx`).
+- Empty/missing path, failed load, or per-frame timeout → deterministic heuristic
+  fallback (brightness/compactness + blink voter, `model_version="heuristic"`),
+  conservative UNKNOWN, never a silent PRIMARY. All shipped AI presets use `null`
+  paths (heuristic) until exports are wired into Deck §8 AI Runtime.
+
 ## Module map
 
 | Path | Responsibility |

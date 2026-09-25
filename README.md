@@ -20,12 +20,10 @@ python src/fsoc_tracker/main.py
 
 ## Presets
 
-The Control Deck exposes four curated, user-facing presets, split by owning portion:
+The Control Deck exposes 33 curated, user-facing presets (16 AI + 17 deterministic), split by owning portion. Coverage per `Resources/PRESET_COVERAGE.json` and `Resources/README_PRESETS_FULL_SUITE.md`:
 
-- **AI — Primary + Decoys** (AI portion, AI ON): one coded primary plus two decoys; demonstrates multi-candidate identity confirmation and decoy rejection.
-- **Classical — Clean Baseline** (deterministic portion, AI OFF): the original single-target detector → EKF-IMM → PID path with no AI controls active.
-- **AI — Robustness** (AI portion, AI ON): the same identity workflow with moderate noise, haze, jitter, platform motion, and faster decoys.
-- **Video — Benchmark** (deterministic portion, AI OFF): external MP4 input with virtual PTZ bypass; switch to the AI portion when testing coded video.
+- **AI mode**: Primary + Decoys, Hard Negatives, Fast Acquisition, Circle/Gaussian/Cross targets, Random Motion, Multi-Target Scene (5 targets + 5 decoys), Signature Disabled, Model Path Test, Failure Fallback, Rain + Low Light, User-Defined Geometry (custom polygon + `trajectories/figure8_demo.json`), Linear/Spiral/Figure-8 Platform.
+- **Deterministic mode**: Baseline, High Noise, All Noise, Circle/Gaussian/Cross targets, Custom Geometry, Environment Full (gradient + stars + vignetting), Linear/Random/Spiral/Figure-8 Platform, Raster/Hybrid Search, Video Benchmark, Video Calibrated (principal-point offsets).
 
 The detailed P01–P12 scenarios remain available as benchmark-only files in `configs/benchmarks/` for deterministic regression tests. They are intentionally not clutter in the GUI selector. Use **Save As** to add a custom preset under `configs/presets/`.
 
@@ -50,20 +48,24 @@ Ground truth is evaluator-only and never leaks to detector/tracker/AI.
 - **Track**: `TrackManager` nearest-gate + missed counters + decoy memory, never `brightest=primary`
 - **Identity**: `Signatures` blink `10110010` vs decoy `11100011` (12 Hz ± tolerance), shape/size, motion envelope, persistence, EKF innovation/IMM; score `0.60*blink+0.20*freq+0.20*size`; confirm `≥0.85` for 5 frames → `PRIMARY_CONFIRMED` else `UNKNOWN`
 - **Safety**: only `PRIMARY_CONFIRMED` drives full PID; `UNKNOWN/CHECKING` bounded motion; rejected decoys remembered; innovación gating (large NIS + low identity → reject); AI timeout → high covariance + prediction/bounded search
+- **AI ON ≠ learned models**: Control Deck `◉ AI System → Apply Active Mode` sets `ai.enabled=true` (pipeline on). Learned MobileNetV3-Small + GRU run only when `ai.candidate_model_path` / `ai.identity_model_path` point at real `models/*/candidate_model.onnx` + `identity_model.onnx` files; empty/missing path = heuristic fallback (`model_ver=heuristic` in Dashboard). All shipped AI presets use `null` paths (heuristic) until you wire exports.
 
 ## Training
 ```bash
-python scripts/generate_training_data.py --num-scenarios 100 --frames-per-scenario 60
+# best-practice retrain (~14k patches / ~250 seqs, exits GRU tiny-dataset mode):
+python scripts/generate_training_data.py --config configs/training.yaml --num-scenarios 300 --frames-per-scenario 90 --seed-start 1
 python scripts/train_candidate_classifier.py --config configs/training.yaml
 python scripts/train_identity_model.py --config configs/training.yaml
 python scripts/calibrate_thresholds.py --config configs/training.yaml
-python scripts/evaluate_ai_models.py --split test --out outputs/ai_eval
-python scripts/export_models.py --format onnx
+python scripts/evaluate_ai_models.py --config configs/training.yaml --split test --out outputs/ai_eval
+python scripts/export_models.py --config configs/training.yaml --format onnx
+# then wire models/*/candidate_model.onnx + identity_model.onnx into Control Deck §8 AI Runtime
 ```
-Data split seeds `1-70/71-85/86-100` no leakage. Hard negatives form substantial val/test. See `docs/training_pipeline.md`.
+Current baseline (2026-09-25, `100×60`): candidate `acc 0.72, false_primary 0.127`, test `P 0.66`; GRU `63/8/14` seqs (`1.0` meaningless). Below `≥0.85` gate — retrain per above.
+Data split seeds `1-70/71-85/86-100` no leakage (`>100` via `seed%3`). Hard negatives form substantial val/test. See `docs/training_pipeline.md`.
 
 ## Config
-- `configs/presets/`: four curated GUI presets; each file declares its owning portion in `preset_meta.system` (`ai` or `deterministic`) and its AI mode in `preset_meta.ai_mode`.
+- `configs/presets/`: 33 curated GUI presets (16 AI + 17 deterministic); each file declares its owning portion in `preset_meta.system` (`ai` or `deterministic`) and its AI mode in `preset_meta.ai_mode`. Source bundle in `Resources/gui_presets/` with coverage in `Resources/PRESET_COVERAGE.json`.
 - `configs/benchmarks/`: benchmark-only P01–P12 regression scenarios (not shown in the Control Deck).
 - `configs/ai.yaml`: `enabled`, `patch_size 64`, `sequence_length 25`, `thresholds`, `signatures`, `model_paths`, `inference_timeout_ms`
 - `configs/training.yaml`: data roots, split, candidate/identity hyperparams, export opset
