@@ -19,7 +19,10 @@ from fsoc_tracker.perception.detector import BeaconDetector
 from fsoc_tracker.tracking.tracker import Tracker
 from fsoc_tracker.evaluation.metrics import MetricsCollector
 from fsoc_tracker.evaluation.auto_logger import RobustPerfLogger
-from fsoc_tracker.common.types import GroundTruth
+from fsoc_tracker.common.types import GroundTruth, Detection
+from fsoc_tracker.common.enums import TrackingState
+from fsoc_tracker.ai.inference import AIInferencePipeline
+from fsoc_tracker.tracking.track_manager import TrackManager
 import time
 
 def load_annotations(video_path):
@@ -55,6 +58,9 @@ def run_one_video(video_path, output_base, cfg_override=None):
     cfg["experiment"]["input_mode"] = "VIDEO"
     cfg["experiment"]["video_path"] = video_path
     annotations = load_annotations(video_path)
+    if not annotations:
+        print(f"[VideoBench] FAIL: No annotations found for {os.path.basename(video_path)}. Annotations are required for RMSE benchmark.")
+        return None, None
     if annotations:
         print(f"[VideoBench] Loaded {len(annotations)} annotations for {os.path.basename(video_path)}")
     else:
@@ -67,6 +73,8 @@ def run_one_video(video_path, output_base, cfg_override=None):
     # Keep FOV proportional: assume same angular FOV, so pixel scale changes automatically via detector's thresholds (area gates are pixel-based, but we keep them)
     det = BeaconDetector(cfg)
     trk = Tracker(cfg)
+    tm = TrackManager(cfg)
+    pipeline = AIInferencePipeline(cfg)
     metrics = MetricsCollector()
     logger = RobustPerfLogger(base_dir=output_base, metrics_collector=metrics)
     metrics.start_run()
@@ -90,8 +98,36 @@ def run_one_video(video_path, output_base, cfg_override=None):
             # If no annotation, we don't compute error (metrics will skip). That's correct per spec: compare with predefined when available.
 
         t0 = time.perf_counter()
-        d = det.detect(f.image, predicted_pos=trk.get_predicted_pixel())
-        est = trk.step(d, f)
+        
+        ai_enabled = cfg.get("ai", {}).get("enabled", False)
+        if ai_enabled:
+            candidates = det.detect_candidates(f.image, predicted_pos=trk.get_predicted_pixel())
+            tracks = tm.update(candidates, f.frame_id, innovation=float(trk.imm.last_nis), imm_probs=tuple(trk.imm.probs))
+            results = pipeline.step(f.image, candidates, tracks)
+            primary_id = pipeline.primary_track_id(results)
+            
+            for res in results:
+                if res.identity:
+                    tr = tracks.get(res.candidate.candidate_id)
+                    if tr:
+                        tr.current_identity = res.identity.identity_state
+                        if res.identity.identity_state.value == "DECOY_CONFIRMED":
+                            tm.mark_rejected(tr.track_id)
+            
+            if primary_id is not None:
+                c_primary = next((r.candidate for r in results if r.candidate.candidate_id == primary_id), None)
+                ident_primary = next((r.identity for r in results if r.candidate.candidate_id == primary_id), None)
+                d = Detection(valid=True, centroid_px=c_primary.centroid_px, bbox=c_primary.bbox, confidence=float(ident_primary.measurement_quality), score=float(ident_primary.primary_probability), area=c_primary.area)
+                est = trk.step(d, f)
+                est.tracking_state = TrackingState.LOCKED
+            else:
+                d = Detection(valid=False)
+                est = trk.step(d, f)
+                est.tracking_state = TrackingState.SEARCHING if not candidates else TrackingState.CANDIDATE
+        else:
+            d = det.detect(f.image, predicted_pos=trk.get_predicted_pixel())
+            est = trk.step(d, f)
+            
         proc_ms = (time.perf_counter() - t0) * 1000
         # No camera command in video mode (PTZ bypassed)
         logger.log_frame(f.frame_id, f.timestamp, d.valid, est, gt, proc_ms, float(vs.fps), 0, 0,
@@ -112,6 +148,7 @@ def main():
     parser.add_argument("--video", type=str, help="Single video path")
     parser.add_argument("--video-dir", type=str, help="Directory of videos")
     parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--ai", action="store_true", help="Enable AI inference pipeline")
     parser.add_argument("--output", type=str, default="outputs/runs")
     args = parser.parse_args()
     videos = []
@@ -123,8 +160,19 @@ def main():
     if not videos:
         print("No videos. Use --video <path> or --video-dir <dir>")
         return
+        
+    cfg_override = {}
+    if args.config:
+        import yaml
+        with open(args.config, 'r') as f:
+            cfg_override = yaml.safe_load(f)
+    if args.ai:
+        if "ai" not in cfg_override:
+            cfg_override["ai"] = {}
+        cfg_override["ai"]["enabled"] = True
+        
     for vp in videos:
-        run_one_video(vp, args.output, args.config)
+        run_one_video(vp, args.output, cfg_override)
 
 if __name__ == "__main__":
     main()

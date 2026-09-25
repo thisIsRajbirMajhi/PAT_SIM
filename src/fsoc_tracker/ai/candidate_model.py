@@ -156,6 +156,9 @@ class CandidateClassifier:
         ai = cfg.get("ai", {}) if isinstance(cfg, dict) else {}
         self.enabled: bool = bool(ai.get("enabled", False))
         self.model_path: Optional[str] = ai.get("candidate_model_path") or ai.get("model_path")
+        if self.model_path and not Path(self.model_path).is_absolute():
+            project_root = Path(__file__).resolve().parent.parent.parent.parent
+            self.model_path = str(project_root / self.model_path)
         self.timeout_ms: int = int(ai.get("inference_timeout_ms", 40))
         self.patch_size: int = int(ai.get("patch_size", PATCH_SIZE))
         self.device = "cpu"

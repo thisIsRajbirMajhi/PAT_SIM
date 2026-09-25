@@ -15,6 +15,7 @@ class CameraController:
         # search spiral state
         self.search_angle = 0.0
         self.search_radius = 0.0
+        self.search_duration = 0.0
         # slew-rate limiting (§6): max change of commanded rate per second
         self.max_slew = 25.0  # °/s per second (tuned: allows 0.8°/s per 30Hz tick, ~16% of max 5°/s)
         self.prev_pan_rate = 0.0
@@ -33,6 +34,7 @@ class CameraController:
     def reset(self):
         self.pan_pid.reset(); self.tilt_pid.reset()
         self.search_angle=0; self.search_radius=0
+        self.search_duration = 0.0
         self.prev_pan_rate = 0.0; self.prev_tilt_rate = 0.0
 
     def step(self, estimate: Estimate, dt=None) -> ControlCommand:
@@ -40,12 +42,33 @@ class CameraController:
         state = estimate.tracking_state
         # if lost/reacquiring/searching -> search controller else PID
         if state in (TrackingState.SEARCHING, TrackingState.REACQUIRING, TrackingState.FAILED):
-            # expanding spiral search — faster to meet ≤1s re-acq
-            self.search_angle += 0.32
-            self.search_radius = min(4.5, self.search_radius + 0.06)
+            self.search_duration += dt
             import math
-            pan_rate = math.cos(self.search_angle) * self.search_radius * 0.85
-            tilt_rate = math.sin(self.search_angle) * self.search_radius * 0.85
+            if self.search_duration < 0.5:
+                # Stage 1: Local recovery
+                self.search_angle += 10.0 * dt
+                self.search_radius = min(1.0, self.search_radius + 2.0 * dt)
+                pan_rate = math.cos(self.search_angle) * self.search_radius
+                tilt_rate = math.sin(self.search_angle) * self.search_radius
+            elif self.search_duration < 3.0:
+                # Stage 2: Calibrated expanding spiral
+                self.search_radius += 2.0 * dt
+                omega = 15.0 / max(self.search_radius, 0.5)
+                self.search_angle += omega * dt
+                pan_rate = math.cos(self.search_angle) * self.search_radius * 0.85
+                tilt_rate = math.sin(self.search_angle) * self.search_radius * 0.85
+            else:
+                # Stage 3: Deterministic raster sweep
+                t_raster = self.search_duration - 3.0
+                sweep_time = 2.0
+                cycle = int(t_raster / sweep_time)
+                phase = (t_raster % sweep_time) / sweep_time
+                if cycle % 2 == 0:
+                    pan_rate = self.max_pan * 0.9
+                else:
+                    pan_rate = -self.max_pan * 0.9
+                tilt_rate = self.max_tilt * 0.5 if phase > 0.85 else 0.0
+
             # clamp to physical limits
             pan_rate = max(-self.max_pan, min(self.max_pan, pan_rate))
             tilt_rate = max(-self.max_tilt, min(self.max_tilt, tilt_rate))
@@ -112,5 +135,6 @@ class CameraController:
         # if locked and error small, decay search
         if state == TrackingState.LOCKED:
             self.search_radius *= 0.9
+            self.search_duration = 0.0
 
         return ControlCommand(pan_rate=float(pan), tilt_rate=float(tilt), saturated=saturated, search_mode=False)

@@ -14,6 +14,7 @@ class BeaconDetector:
         self.blur = int(d.get("blur_ksize",3))
         self.block = int(d.get("adaptive_block",51))
         self.C = int(d.get("adaptive_C",-5))
+        self.morph = int(d.get("morphology_ksize", 3))
         self.res_w, self.res_h = cam_res
         self.cfg = cfg
 
@@ -35,14 +36,21 @@ class BeaconDetector:
         if self.blur >= 3:
             k = self.blur if self.blur % 2 == 1 else self.blur + 1
             img = cv2.GaussianBlur(img, (k, k), 0)
-        bg = float(np.median(img))
-        noise = float(np.std(img)) + 1e-6
-        p98 = float(np.percentile(img, 98))
-        thresh_val = max(bg + self.k * noise, p98 - 8, 120)
-        thresh_val = float(np.clip(thresh_val, 80, 230))
-        _, binary = cv2.threshold(img, thresh_val, 255, cv2.THRESH_BINARY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+        if self.block > 1:
+            k = self.block if self.block % 2 == 1 else self.block + 1
+            binary = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, k, self.C)
+        else:
+            bg = float(np.median(img))
+            noise = float(np.std(img)) + 1e-6
+            p98 = float(np.percentile(img, 98))
+            thresh_val = max(bg + self.k * noise, p98 - 8, 120)
+            thresh_val = float(np.clip(thresh_val, 80, 230))
+            _, binary = cv2.threshold(img, thresh_val, 255, cv2.THRESH_BINARY)
+            
+        mk = self.morph if self.morph % 2 == 1 else self.morph + 1
+        if mk > 1:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (mk, mk))
+            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
         num, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
         h, w = img.shape
         cx, cy = w / 2, h / 2

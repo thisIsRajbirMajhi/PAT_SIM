@@ -12,10 +12,12 @@ class MetricsCollector:
         self.reacq_times = []
         self._acquired = False
         self._lost_since = None
+        self._lost_since_ts = None
         self._last_state = None
         self.proc_times = []
         self.errors = []
         self.t_acq_start = None
+        self.t_acq_start_ts = None
         self.saturation_count = 0
         self.loss_count = 0
         self.acq_count = 0
@@ -54,18 +56,23 @@ class MetricsCollector:
             # target outside FOV -> no error, count as loss
             pass
 
+        if self.t_acq_start_ts is None:
+            self.t_acq_start_ts = timestamp
+
         # acquisition timing
         if not self._acquired and estimate.tracking_state.value == "LOCKED":
-            self.acquisition_time = time.perf_counter() - self.t_acq_start
+            self.acquisition_time = timestamp - self.t_acq_start_ts
             self._acquired = True
             self._lost_since = None
+            self._lost_since_ts = None
         # reacquisition
         if self._last_state and self._last_state.value in ("LOCKED","ACQUIRING") and estimate.tracking_state.value in ("TEMP_LOST","REACQUIRING","SEARCHING"):
-            if self._lost_since is None:
-                self._lost_since = time.perf_counter()
-        if self._lost_since is not None and estimate.tracking_state.value == "LOCKED":
-            reacq = time.perf_counter() - self._lost_since
+            if self._lost_since_ts is None:
+                self._lost_since_ts = timestamp
+        if self._lost_since_ts is not None and estimate.tracking_state.value == "LOCKED":
+            reacq = timestamp - self._lost_since_ts
             self.reacq_times.append(reacq)
+            self._lost_since_ts = None
             self._lost_since = None
 
         # saturation and confidence tracking

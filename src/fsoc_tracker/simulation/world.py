@@ -13,7 +13,10 @@ class World:
         # build base with all environment systems
         self.base = self._build_base(cfg, seed)
         # trajectory - support multiple independent targets (Sr.8)
-        self.target_count = int(cfg["target"].get("count", 1))
+        primary_count = int(cfg["target"].get("count", 1))
+        decoys_cfg = cfg.get("decoys", {}) if isinstance(cfg.get("decoys"), dict) else {}
+        decoy_count = int(decoys_cfg.get("count", 0)) if decoys_cfg.get("enabled", False) else 0
+        self.target_count = primary_count + decoy_count
         self.trajectories = []
         # Primary target uses selected trajectory with main seed
         self.traj = make_trajectory(cfg, seed=seed)
@@ -55,7 +58,10 @@ class World:
         primary uses the configured code and decoys use their explicit or
         deterministic alternate codes.
         """
-        count = int(cfg.get("target", {}).get("count", 1))
+        primary_count = int(cfg.get("target", {}).get("count", 1))
+        decoys_cfg = cfg.get("decoys", {}) if isinstance(cfg.get("decoys"), dict) else {}
+        decoy_count = int(decoys_cfg.get("count", 0)) if decoys_cfg.get("enabled", False) else 0
+        count = primary_count + decoy_count
         if not bool(cfg.get("ai", {}).get("enabled", False)):
             return ["1"] * count
 
@@ -235,8 +241,12 @@ class World:
         new_env = cfg.get("environment", {})
         old_w = (self.cfg["world"]["width"], self.cfg["world"]["height"], self.cfg["world"].get("background", 18))
         new_w = (cfg["world"]["width"], cfg["world"]["height"], cfg["world"].get("background", 18))
-        old_count = int(self.cfg["target"].get("count", 1))
-        new_count = int(cfg.get("target", {}).get("count", 1))
+        old_primary = int(self.cfg["target"].get("count", 1))
+        old_decoys = self.cfg.get("decoys", {}) if isinstance(self.cfg.get("decoys"), dict) else {}
+        old_count = old_primary + (int(old_decoys.get("count", 0)) if old_decoys.get("enabled", False) else 0)
+        new_primary = int(cfg.get("target", {}).get("count", 1))
+        new_decoys = cfg.get("decoys", {}) if isinstance(cfg.get("decoys"), dict) else {}
+        new_count = new_primary + (int(new_decoys.get("count", 0)) if new_decoys.get("enabled", False) else 0)
         old_shape = self.cfg["target"].get("shape", "square")
         new_shape = cfg.get("target", {}).get("shape", "square")
         # check if rebuild needed
@@ -312,7 +322,7 @@ class World:
             img = np.clip(img.astype(np.int16) + jit, 0, 255).astype(np.uint8)
 
         # draw beacon(s) — support count (independent trajectories Sr.8) & shape Sr.9 (including user-defined)
-        count = int(self.cfg["target"].get("count", 1))
+        count = self.target_count
         shape = self.cfg["target"].get("shape", "square")
         tgt_type = str(self.cfg["target"].get("type", "beacon_spot")).lower()
         s = self.target_size
@@ -421,7 +431,10 @@ class World:
         if seed is not None:
             self.seed = seed
         self.frame_id = 0
-        self.target_count = int(self.cfg["target"].get("count", 1))
+        primary_count = int(self.cfg["target"].get("count", 1))
+        decoys_cfg = self.cfg.get("decoys", {}) if isinstance(self.cfg.get("decoys"), dict) else {}
+        decoy_count = int(decoys_cfg.get("count", 0)) if decoys_cfg.get("enabled", False) else 0
+        self.target_count = primary_count + decoy_count
         self.trajectories = []
         self.traj = make_trajectory(self.cfg, seed=self.seed)
         self.trajectories.append(self.traj)

@@ -403,93 +403,54 @@ class MainWindow(QMainWindow):
         ai_primary_ident = None
 
         if ai_enabled:
-            # multi-candidate generation
             candidates = self.detector.detect_candidates(frame.image, predicted_pos=pred)
-            # Stage-1 candidate classification (heuristic fallback if no model)
-            try:
-                candidates = self.ai_pipeline.candidate_clf.predict(candidates)
-            except Exception as e:
-                logger.warning("[AI] candidate clf fallback: %s", e)
-            self._ai_candidates = list(candidates)
-            # track management (nearest-neighbor gating, decoy memory)
+            
             try:
                 tracks = self.track_manager.update(candidates, frame.frame_id, innovation=float(self.tracker.imm.last_nis), imm_probs=tuple(self.tracker.imm.probs))
             except Exception as e:
                 logger.warning("[AI] track_manager error: %s", e)
                 tracks = dict(self.track_manager.tracks)
             self._ai_tracks = dict(tracks)
-            # Stage-2 identity per track (+ temporal confirmation)
-            ai_results = []
-            for c in list(candidates):
-                tr = tracks.get(c.candidate_id)
-                if tr is None:
-                    continue
-                try:
-                    sig_score, _dbg = signature_score(tr.blink_history, tr.brightness_history, tr.size_history, self.ai_pipeline.sig_cfg, fps=float(self.cfg["camera"]["fps"]))
-                except Exception:
-                    sig_score = 0.5
-                try:
-                    ident = self.ai_pipeline.identity_clf.predict_for_track(tr, signature_score=sig_score)
-                except Exception as e:
-                    from ..ai.types import IdentityResult, IdentityState as AIState2, IdentityEvidence
-                    ident = IdentityResult(track_id=tr.track_id, primary_probability=0.30, decoy_probability=0.25, unknown_probability=0.45, identity_state=AIState2.UNKNOWN, measurement_quality=0.35, evidence=IdentityEvidence(), model_version="fallback")
-                    ident.evidence.optical_signature_score = float(sig_score)
-                # temporal confirmation via identity state machine (requires N consecutive frames)
-                try:
-                    ident.identity_state = self.identity_sm.update(tr.track_id, ident.primary_probability, ident.decoy_probability, ident.unknown_probability, has_observation=True)
-                except Exception:
-                    pass
-                ident.evidence.optical_signature_score = float(sig_score)
-                # appearance score from Stage-1 beacon probability (single-frame evidence)
-                try:
-                    ident.evidence.appearance_score = float(max(0.0, min(1.0, c.beacon_probability)))
-                except Exception:
-                    pass
-                # motion/estimator consistency from current innovation (fresh per frame)
-                try:
-                    _nis_now = float(self.tracker.imm.last_nis)
-                except Exception:
-                    _nis_now = 0.0
-                ident.evidence.innovation_sigma = _nis_now
-                ident.evidence.motion_score = 1.0 if _nis_now < 5.0 else (0.5 if _nis_now < 18.0 else 0.2)
-                ident.evidence.estimator_consistency_score = ident.evidence.motion_score
-                if sig_score >= 0.68:
-                    ident.evidence.reasons.append("✓ Correct optical signature")
-                elif sig_score <= 0.42:
-                    ident.evidence.reasons.append("✗ Wrong signature")
-                # motion / stability hints
-                if tr.missed_frames == 0 and len(tr.position_history) >= 3:
-                    ident.evidence.reasons.append("✓ Stable centroid")
-                if _nis_now < 5.0:
-                    ident.evidence.reasons.append("✓ Innovation within gate")
-                else:
-                    ident.evidence.reasons.append("✗ High innovation")
-                tr.current_identity = ident.identity_state
-                tr.identity_history.append(ident)
-                if ident.identity_state == AIIdentityState.DECOY_CONFIRMED:
-                    self.track_manager.mark_rejected(tr.track_id)
-                ai_results.append((c, ident))
-            # decay for missed tracks
-            for tid, tr in list(tracks.items()):
-                if tr.missed_frames > 0:
-                    try:
-                        ns = self.identity_sm.update(tid, 0.15, 0.15, 0.70, has_observation=False)
-                        tr.current_identity = ns
-                    except Exception:
-                        pass
-            self._ai_results = list(ai_results)
-            # reset identity streaks for pruned tracks (prevents streak-dict leak)
-            try:
-                for _pid in list(getattr(self.track_manager, "last_pruned", [])):
-                    self.identity_sm.reset_track(_pid)
-            except Exception:
-                pass
-            # select PRIMARY_CONFIRMED with highest primary_prob (if multiple)
+            
+            # call unified pipeline
+            pipeline_results = self.ai_pipeline.step(frame.image, candidates, tracks)
+            self._ai_candidates = []
+            self._ai_results = []
+            
             primary_pair = None
-            for c, ident in ai_results:
-                if ident.identity_state == AIIdentityState.PRIMARY_CONFIRMED:
-                    if primary_pair is None or ident.primary_probability > primary_pair[1].primary_probability:
-                        primary_pair = (c, ident)
+            for res in pipeline_results:
+                c = res.candidate
+                self._ai_candidates.append(c)
+                ident = res.identity
+                if ident:
+                    tr = tracks.get(c.candidate_id)
+                    if tr:
+                        tr.current_identity = ident.identity_state
+                        tr.identity_history.append(ident)
+                        if ident.identity_state == AIIdentityState.DECOY_CONFIRMED:
+                            self.track_manager.mark_rejected(tr.track_id)
+                        
+                        # enrich evidence for GUI
+                        ident.evidence.appearance_score = float(max(0.0, min(1.0, c.beacon_probability)))
+                        try:
+                            _nis_now = float(self.tracker.imm.last_nis)
+                        except:
+                            _nis_now = 0.0
+                        ident.evidence.innovation_sigma = _nis_now
+                        if ident.evidence.optical_signature_score >= 0.68:
+                            ident.evidence.reasons.append("✓ Correct optical signature")
+                        elif ident.evidence.optical_signature_score <= 0.42:
+                            ident.evidence.reasons.append("✗ Wrong signature")
+                        if _nis_now < 5.0:
+                            ident.evidence.reasons.append("✓ Innovation within gate")
+                        
+                    self._ai_results.append((c, ident))
+                    if ident.identity_state == AIIdentityState.PRIMARY_CONFIRMED:
+                        if primary_pair is None or ident.primary_probability > primary_pair[1].primary_probability:
+                            primary_pair = (c, ident)
+                else:
+                    self._ai_results.append((c, None))
+            
             if primary_pair is not None:
                 c_primary, ident_primary = primary_pair
                 ai_primary_ident = ident_primary
@@ -514,8 +475,9 @@ class MainWindow(QMainWindow):
                 detection = Detection(valid=False)
                 estimate = self.tracker.step(detection, frame)
                 # map best AI state to TrackingState for PID safety (never full lock without confirmation)
-                if ai_results:
-                    best_c, best_ident = max(ai_results, key=lambda x: x[1].primary_probability)
+                valid_ai = [x for x in self._ai_results if x[1] is not None]
+                if valid_ai:
+                    best_c, best_ident = max(valid_ai, key=lambda x: x[1].primary_probability)
                     bs = best_ident.identity_state
                     if bs == AIIdentityState.IDENTITY_CHECKING:
                         estimate.tracking_state = TrackingState.CANDIDATE

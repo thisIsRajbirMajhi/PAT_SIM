@@ -20,8 +20,9 @@ class Tracker:
     def update_config(self, cfg):
         self.cfg = cfg
         self.dt = 1.0 / max(float(cfg["camera"]["fps"]), 1)
-        # keep IMM but update its cfg reference
-        self.imm.cfg = cfg
+        # Rebuild IMM and SM to avoid stale parameters (Fix P1-06)
+        self.imm = IMM(cfg)
+        self.sm = TrackingStateMachine(cfg)
 
     def step(self, detection: Detection, frame: Frame) -> Estimate:
         # predict

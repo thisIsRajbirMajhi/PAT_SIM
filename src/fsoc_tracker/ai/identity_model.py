@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, Optional, Tuple
+from pathlib import Path
 import time
 import numpy as np
 
@@ -68,9 +69,9 @@ def _heuristic_identity(seq: np.ndarray, mask: np.ndarray, signature_score: floa
         return 0.25, 0.20, 0.55  # insufficient evidence → UNKNOWN (need at least 5 obs)
     if signature_score >= 0.60 and valid >= 5:
         return 0.88, 0.06, 0.06
-    if signature_score <= 0.42 and valid >= 8:
-        return 0.15, 0.70, 0.15
-    return 0.30, 0.25, 0.45
+    if signature_score <= 0.55 and valid >= 5:
+        return 0.06, 0.88, 0.06
+    return 0.30, 0.30, 0.40
 
 
 # -------------------------------------------------------------- torch GRU
@@ -105,6 +106,9 @@ class IdentityClassifier:
         ai = cfg.get("ai", {}) if isinstance(cfg, dict) else {}
         self.enabled: bool = bool(ai.get("enabled", False))
         self.model_path: Optional[str] = ai.get("identity_model_path")
+        if self.model_path and not Path(self.model_path).is_absolute():
+            project_root = Path(__file__).resolve().parent.parent.parent.parent
+            self.model_path = str(project_root / self.model_path)
         self.timeout_ms: int = int(ai.get("inference_timeout_ms", 40))
         self.seq_len: int = int(ai.get("sequence_length", SEQ_LEN))
         self.hidden: int = int(ai.get("gru_hidden", 64))

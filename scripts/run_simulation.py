@@ -54,6 +54,7 @@ def main():
     metrics.input_fps = float(cfg["camera"]["fps"])
 
     t0 = time.perf_counter()
+    last_loop_t = t0
     frame_n = 0
     while True:
         f, gt = src.read()
@@ -64,9 +65,12 @@ def main():
         est = trk.step(d, f)
         cmd = ctrl.step(est, dt=1/float(cfg["camera"]["fps"]))
         src.apply_camera_command(cmd.pan_rate, cmd.tilt_rate, 1/float(cfg["camera"]["fps"]))
-        proc_ms = (time.perf_counter() - det_start) * 1000
-        # Smooth FPS is not needed headless, use input fps
-        logger.log_frame(f.frame_id, f.timestamp, d.valid, est, gt, proc_ms, float(cfg["camera"]["fps"]), cmd.pan_rate, cmd.tilt_rate,
+        now = time.perf_counter()
+        proc_ms = (now - det_start) * 1000
+        loop_dt = now - last_loop_t
+        last_loop_t = now
+        measured_fps = 1.0 / max(loop_dt, 1e-6)
+        logger.log_frame(f.frame_id, f.timestamp, d.valid, est, gt, proc_ms, measured_fps, cmd.pan_rate, cmd.tilt_rate,
                          detection_confidence=d.confidence, saturated=cmd.saturated, input_fps=float(cfg["camera"]["fps"]))
         frame_n += 1
         if f.timestamp >= float(cfg["experiment"]["duration_s"]):

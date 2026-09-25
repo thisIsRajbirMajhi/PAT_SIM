@@ -25,6 +25,7 @@ def run_one(cfg, frames=180):
     mc.start_run()
     mc.input_fps = float(cfg["camera"]["fps"])
     import time as tm
+    last_loop_t = tm.perf_counter()
     for i in range(frames):
         f, gt = src.read()
         t0 = tm.perf_counter()
@@ -32,8 +33,12 @@ def run_one(cfg, frames=180):
         est = trk.step(d, f)
         cmd = ctrl.step(est, dt=1/float(cfg["camera"]["fps"]))
         src.apply_camera_command(cmd.pan_rate, cmd.tilt_rate, 1/float(cfg["camera"]["fps"]))
-        proc_ms = (tm.perf_counter() - t0)*1000
-        mc.update(f.frame_id, f.timestamp, d.valid, est, gt, proc_ms, 30, cmd.pan_rate, cmd.tilt_rate, detection_confidence=d.confidence, saturated=cmd.saturated)
+        now = tm.perf_counter()
+        proc_ms = (now - t0)*1000
+        loop_dt = now - last_loop_t
+        last_loop_t = now
+        measured_fps = 1.0 / max(loop_dt, 1e-6)
+        mc.update(f.frame_id, f.timestamp, d.valid, est, gt, proc_ms, measured_fps, cmd.pan_rate, cmd.tilt_rate, detection_confidence=d.confidence, saturated=cmd.saturated, input_fps=float(cfg["camera"]["fps"]))
     return mc.summary()
 
 def main():

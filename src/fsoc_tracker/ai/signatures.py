@@ -107,14 +107,9 @@ def signature_score(
     else:
         scores["blink_corr"] = 0.5
 
-    # frequency — lenient: use relaxed tolerance (at least 25%) for short histories
-    scores["freq_error"] = modulation_frequency_error(blink_history, cfg.modulation_freq_hz, fps)
-    # effective tolerance: max(cfg.freq_tolerance, 0.25) to avoid crushing score on FFT noise
-    eff_tol = max(float(cfg.freq_tolerance), 0.25)
-    scores["freq_score"] = float(np.clip(1.0 - scores["freq_error"] / eff_tol, 0, 1))
-    # fallback: if history too short, neutral score
-    if len(blink_history) < 12:
-        scores["freq_score"] = max(scores["freq_score"], 0.60)
+    # frequency claim removed per P1-05: use code correlation only
+    scores["freq_error"] = 0.0
+    scores["freq_score"] = 1.0
 
     # size envelope
     if size_history:
@@ -124,9 +119,8 @@ def signature_score(
     else:
         scores["size_ok"] = 0.5
 
-    # aggregate — blink is strongest, freq secondary, size minor (Plan §6)
-    # Use 0.60/0.20/0.20 to let blink dominate for synthetic where frequency estimate is noisy
-    agg = 0.60 * scores["blink_corr"] + 0.20 * scores["freq_score"] + 0.20 * scores["size_ok"]
+    # aggregate — blink is strongest, size minor
+    agg = 0.80 * scores["blink_corr"] + 0.20 * scores["size_ok"]
     return float(np.clip(agg, 0, 1)), scores
 
 
