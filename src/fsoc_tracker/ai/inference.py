@@ -107,7 +107,7 @@ class AIInferencePipeline:
             # signature score from track history
             sig_score, _dbg = signature_score(
                 track.blink_history, track.brightness_history,
-                [int(v) for v in track.brightness_history],  # size proxy until patch size stored
+                getattr(track, 'size_history', track.brightness_history),
                 self.sig_cfg, fps=self._fps,
             )
             try:

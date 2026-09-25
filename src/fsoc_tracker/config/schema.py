@@ -40,5 +40,17 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     assert cfg["platform"]["type"] in ("none","linear","circular","random","spiral","figure_of_8","figure_8","figure-of-8","spiral"), "Platform Linear def + Circular/Random/Spiral/Figure_8"
     assert 0 <= cfg["platform"].get("speed_px_per_frame",0) <= 20, "Platform ±20 px/frame"
 
+    # --- AI ---
+    if "ai" in cfg:
+        ai = cfg["ai"]
+        assert isinstance(ai.get("enabled", False), bool), "ai.enabled must be bool"
+        assert 32 <= int(ai.get("patch_size", 64)) <= 128, "ai patch_size 32-128"
+        assert 10 <= int(ai.get("sequence_length", 25)) <= 50, "ai sequence_length 10-50"
+        thr = ai.get("thresholds", {})
+        if thr:
+            assert 0.5 <= float(thr.get("primary_threshold", 0.85)) <= 0.99
+            assert 0.5 <= float(thr.get("decoy_threshold", 0.85)) <= 0.99
+            assert 1 <= int(thr.get("confirmation_frames", 5)) <= 15
+
     # environment brightness etc already validated elsewhere
     return cfg

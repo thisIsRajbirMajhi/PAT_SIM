@@ -156,6 +156,7 @@ class TrackState:
     position_history: List[Tuple[float, float]] = field(default_factory=list)
     velocity_history: List[Tuple[float, float]] = field(default_factory=list)
     brightness_history: List[float] = field(default_factory=list)
+    size_history: List[float] = field(default_factory=list)  # area or width*height
     confidence_history: List[float] = field(default_factory=list)
     # EKF/IMM derived
     innovation_history: List[float] = field(default_factory=list)

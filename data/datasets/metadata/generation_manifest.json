@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-09-25T07:15:41Z",
+  "num_scenarios": 100,
+  "frames_per_scenario": 60,
+  "total_patches": 4725,
+  "total_sequences": 85,
+  "splits": {
+    "train": {
+      "patches": 3493,
+      "sequences": 63
+    },
+    "val": {
+      "patches": 488,
+      "sequences": 8
+    },
+    "test": {
+      "patches": 744,
+      "sequences": 14
+    }
+  },
+  "version": "1.0.0",
+  "hard_types": [
+    "none",
+    "bright_decoy",
+    "centre_decoy",
+    "fog",
+    "haze",
+    "low_light",
+    "high_noise",
+    "jitter"
+  ]
+}

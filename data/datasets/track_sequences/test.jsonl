@@ -1,0 +1,14 @@
+{"seed": 87, "split": "test", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed87_track001_PRIMARY.npz", "hard_type": "high_noise"}
+{"seed": 88, "split": "test", "track_id": 2, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed88_track002_PRIMARY.npz", "hard_type": "jitter"}
+{"seed": 90, "split": "test", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed90_track001_PRIMARY.npz", "hard_type": "bright_decoy"}
+{"seed": 91, "split": "test", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed91_track001_PRIMARY.npz", "hard_type": "centre_decoy"}
+{"seed": 91, "split": "test", "track_id": 2, "label": "DECOY", "seq_len": 25, "valid_len": 25, "file": "seed91_track002_DECOY.npz", "hard_type": "centre_decoy"}
+{"seed": 91, "split": "test", "track_id": 3, "label": "DECOY", "seq_len": 25, "valid_len": 25, "file": "seed91_track003_DECOY.npz", "hard_type": "centre_decoy"}
+{"seed": 94, "split": "test", "track_id": 1, "label": "UNKNOWN", "seq_len": 25, "valid_len": 25, "file": "seed94_track001_UNKNOWN.npz", "hard_type": "low_light"}
+{"seed": 95, "split": "test", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed95_track001_PRIMARY.npz", "hard_type": "high_noise"}
+{"seed": 96, "split": "test", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed96_track001_PRIMARY.npz", "hard_type": "jitter"}
+{"seed": 97, "split": "test", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed97_track001_PRIMARY.npz", "hard_type": "none"}
+{"seed": 97, "split": "test", "track_id": 2, "label": "DECOY", "seq_len": 25, "valid_len": 20, "file": "seed97_track002_DECOY.npz", "hard_type": "none"}
+{"seed": 98, "split": "test", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed98_track001_PRIMARY.npz", "hard_type": "bright_decoy"}
+{"seed": 99, "split": "test", "track_id": 1, "label": "DECOY", "seq_len": 25, "valid_len": 25, "file": "seed99_track001_DECOY.npz", "hard_type": "centre_decoy"}
+{"seed": 100, "split": "test", "track_id": 1, "label": "DECOY", "seq_len": 25, "valid_len": 25, "file": "seed100_track001_DECOY.npz", "hard_type": "fog"}

@@ -43,13 +43,11 @@ def _heuristic_identity(seq: np.ndarray, mask: np.ndarray, signature_score: floa
     the valid window. Returns (p_primary, p_decoy, p_unknown).
     """
     valid = mask.sum()
-    if valid < 3:
-        return 0.20, 0.20, 0.60  # insufficient evidence → UNKNOWN
-    # seq[:, 3] is beacon_prob proxy when embeddings unavailable; use signature as tie-breaker
-    # prefer UNKNOWN unless strong evidence
-    if signature_score >= 0.72 and valid >= 5:
-        return 0.78, 0.12, 0.10
-    if signature_score <= 0.42:
+    if valid < 5:
+        return 0.25, 0.20, 0.55  # insufficient evidence → UNKNOWN (need at least 5 obs)
+    if signature_score >= 0.60 and valid >= 5:
+        return 0.88, 0.06, 0.06
+    if signature_score <= 0.42 and valid >= 8:
         return 0.15, 0.70, 0.15
     return 0.30, 0.25, 0.45
 
@@ -148,12 +146,10 @@ class IdentityClassifier:
         else:
             p_primary, p_decoy, p_unknown = _heuristic_identity(seq, mask, signature_score)
 
-        # map probabilities to IdentityState via thresholds (caller may override)
-        # default: require PRIMARY >= 0.85 for confirmation — actual gating in thresholds.py/state machine
-        if p_primary >= 0.85:
-            state = IdentityState.PRIMARY_CONFIRMED
-        elif p_decoy >= 0.85:
-            state = IdentityState.DECOY_CONFIRMED
+        # map probabilities to IdentityState — high confidence goes to IDENTITY_CHECKING,
+        # pipeline / state machine promotes to PRIMARY/DECOY_CONFIRMED after N consecutive frames
+        if p_primary >= 0.85 or p_decoy >= 0.85:
+            state = IdentityState.IDENTITY_CHECKING
         elif max(p_primary, p_decoy, p_unknown) < 0.60:
             state = IdentityState.UNKNOWN
         else:

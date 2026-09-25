@@ -34,6 +34,26 @@ class World:
         self.frame_id = 0
         self.all_world_pos = [traj.step(0) for traj in self.trajectories]
         self.world_pos = self.all_world_pos[0] if self.all_world_pos else self.traj.step(0)
+        # optical signature blink patterns per target (Plan §8)
+        # Preserve constant bright beacon when AI disabled and no decoys (backward compat for classical presets)
+        ai_enabled = bool(cfg.get("ai", {}).get("enabled", False))
+        prim_sig = cfg.get("primary_target", {}).get("optical_signature", {}) if isinstance(cfg.get("primary_target"), dict) else {}
+        sig_enabled = bool(prim_sig.get("enabled", ai_enabled))
+        if not sig_enabled and int(cfg["target"].get("count", 1)) == 1:
+            # classical single-target without signature: always on
+            self._blink_patterns = ["1"]
+        else:
+            self._blink_patterns = [str(prim_sig.get("blink_pattern", cfg.get("ai", {}).get("signatures", {}).get("blink_pattern", "10110010")))]
+            # decoys: alternate pattern or from decoys.profiles
+            decoys = cfg.get("decoys", {})
+            if isinstance(decoys, dict) and decoys.get("profiles"):
+                for prof in decoys["profiles"]:
+                    pat = prof.get("blink_pattern") or "11100011"
+                    self._blink_patterns.append(str(pat))
+            # fill remaining slots with rotating decoy patterns
+            while len(self._blink_patterns) < self.target_count:
+                decoy_opts = ["11100011", "10101010", "11001100", "00011100"]
+                self._blink_patterns.append(decoy_opts[(len(self._blink_patterns) - 1) % len(decoy_opts)])
 
     # ---------- base building ----------
     def _build_base(self, cfg, seed):
@@ -221,11 +241,28 @@ class World:
                 distractor_cfg["target"]["speed_px_per_frame"] = float(cfg["target"].get("speed_px_per_frame", 2.8)) * (0.7 + 0.6 * ((i % 3) / 2))
                 self.trajectories.append(make_trajectory(distractor_cfg, seed=self.seed + i * 1009))
             self.all_world_pos = [traj.step(self.frame_id) for traj in self.trajectories]
-        # update target size/intensity/shape live
+        # update target size/intensity/shape live + blink patterns
         self.target_size = int(cfg["target"]["size"])
         self.target_intensity = int(cfg["target"].get("intensity", 255))
         self.target_shape = cfg["target"].get("shape", "square")
         self.custom_polygon = cfg["target"].get("custom_polygon", None)
+        # refresh blink patterns if count changed
+        ai_enabled = bool(cfg.get("ai", {}).get("enabled", False))
+        prim_sig = cfg.get("primary_target", {}).get("optical_signature", {}) if isinstance(cfg.get("primary_target"), dict) else {}
+        sig_enabled = bool(prim_sig.get("enabled", ai_enabled))
+        if not sig_enabled and int(cfg.get("target", {}).get("count", 1)) == 1:
+            self._blink_patterns = ["1"]
+        else:
+            self._blink_patterns = [str(prim_sig.get("blink_pattern", cfg.get("ai", {}).get("signatures", {}).get("blink_pattern", "10110010")))]
+            decoys = cfg.get("decoys", {})
+            if isinstance(decoys, dict) and decoys.get("profiles"):
+                for prof in decoys["profiles"]:
+                    pat = prof.get("blink_pattern") or "11100011"
+                    if len(self._blink_patterns) < cfg.get("target", {}).get("count", 1):
+                        self._blink_patterns.append(str(pat))
+            while len(self._blink_patterns) < int(cfg.get("target", {}).get("count", 1)):
+                decoy_opts = ["11100011", "10101010", "11001100", "00011100"]
+                self._blink_patterns.append(decoy_opts[(len(self._blink_patterns) - 1) % len(decoy_opts)])
 
     def step(self):
         # Update all targets independently (Sr.8 multi-target)
@@ -282,11 +319,33 @@ class World:
             # If world_pos is the primary, ensure first matches
             if positions and world_pos:
                 positions[0] = world_pos
-        for (x_f, y_f) in positions:
+        for idx, (x_f, y_f) in enumerate(positions):
             x = int(round(x_f))
             y = int(round(y_f))
             if not (0 <= x < self.w and 0 <= y < self.h):
                 continue
+            # optical signature: blink pattern modulates intensity (Plan §8)
+            # primary idx 0 uses primary pattern, decoys use alternate patterns
+            pat = self._blink_patterns[idx] if idx < len(self._blink_patterns) else "1"
+            is_on = True
+            if pat and len(pat) > 0:
+                try:
+                    is_on = pat[self.frame_id % len(pat)] == "1"
+                except Exception:
+                    is_on = True
+            # Off frames remain detectable but dimmer (180 vs 255) to preserve detector while providing signature
+            off_intensity = int(self.cfg.get("primary_target", {}).get("brightness_range", [180,255])[0]) if idx==0 else 190
+            cur_intensity = int(self.target_intensity) if is_on else int(off_intensity)
+            # decoy subtle brightness variation per profile (if configured)
+            if idx > 0:
+                # decoy brighter spoof: occasionally boost
+                try:
+                    dprof = self.cfg.get("decoys", {}).get("profiles", [])[idx - 1] if idx - 1 < len(self.cfg.get("decoys", {}).get("profiles", [])) else {}
+                    if isinstance(dprof, dict) and "brightness_range" in dprof:
+                        lo, hi = dprof["brightness_range"]
+                        cur_intensity = int(cur_intensity * 0.9 + hi * 0.1) if is_on else cur_intensity
+                except Exception:
+                    pass
             # glow - supports square, circle, gaussian, cross, user-defined (Sr.9)
             if shape == "circle":
                 cv2.circle(img, (x, y), half+2, int(self.bg+45), -1)
@@ -302,17 +361,17 @@ class World:
                 cv2.rectangle(img, (x-half-1, y-half-1), (x+half+1, y+half+1), int(self.bg+45), -1)
             # core - supports all shapes including user-defined polygon
             if shape == "circle":
-                cv2.circle(img, (x, y), half, int(self.target_intensity), -1)
+                cv2.circle(img, (x, y), half, int(cur_intensity), -1)
             elif shape == "gaussian":
-                cv2.circle(img, (x, y), half, int(self.target_intensity), -1)
+                cv2.circle(img, (x, y), half, int(cur_intensity), -1)
             elif shape == "cross":
-                cv2.rectangle(img, (x-half, y-1), (x+half, y+1), int(self.target_intensity), -1)
-                cv2.rectangle(img, (x-1, y-half), (x+1, y+half), int(self.target_intensity), -1)
+                cv2.rectangle(img, (x-half, y-1), (x+half, y+1), int(cur_intensity), -1)
+                cv2.rectangle(img, (x-1, y-half), (x+1, y+half), int(cur_intensity), -1)
             elif shape == "user-defined":
                 pts = self._get_user_polygon(x, y, half)
-                cv2.fillPoly(img, [pts], int(self.target_intensity))
+                cv2.fillPoly(img, [pts], int(cur_intensity))
             else:
-                cv2.rectangle(img, (x-half, y-half), (x+half, y+half), int(self.target_intensity), -1)
+                cv2.rectangle(img, (x-half, y-half), (x+half, y+half), int(cur_intensity), -1)
             # blur small region for realism
             x0 = max(0, x-half-2); y0 = max(0, y-half-2)
             x1 = min(self.w, x+half+3); y1 = min(self.h, y+half+3)
@@ -322,17 +381,17 @@ class World:
                 img[y0:y1, x0:x1] = patch
                 # re-brighten core after blur - supports all shapes
                 if shape == "circle":
-                    cv2.circle(img, (x, y), half, int(self.target_intensity), -1)
+                    cv2.circle(img, (x, y), half, int(cur_intensity), -1)
                 elif shape == "gaussian":
-                    cv2.circle(img, (x, y), half, int(self.target_intensity), -1)
+                    cv2.circle(img, (x, y), half, int(cur_intensity), -1)
                 elif shape == "cross":
-                    cv2.rectangle(img, (x-half, y-1), (x+half, y+1), int(self.target_intensity), -1)
-                    cv2.rectangle(img, (x-1, y-half), (x+1, y+half), int(self.target_intensity), -1)
+                    cv2.rectangle(img, (x-half, y-1), (x+half, y+1), int(cur_intensity), -1)
+                    cv2.rectangle(img, (x-1, y-half), (x+1, y+half), int(cur_intensity), -1)
                 elif shape == "user-defined":
                     pts = self._get_user_polygon(x, y, half)
-                    cv2.fillPoly(img, [pts], int(self.target_intensity))
+                    cv2.fillPoly(img, [pts], int(cur_intensity))
                 else:
-                    cv2.rectangle(img, (x-half, y-half), (x+half, y+half), int(self.target_intensity), -1)
+                    cv2.rectangle(img, (x-half, y-half), (x+half, y+half), int(cur_intensity), -1)
         return img
 
     def reset(self, seed=None):

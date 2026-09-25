@@ -9,16 +9,23 @@ from .dashboard import Dashboard
 from .live_dashboard_window import LiveDashboardWindow
 from .control_deck import ControlDeck
 from .benchmark_dialog import BenchmarkResultDialog
+from .tracks_view import TracksView
 from ..config.loader import load_config
 from ..input.synthetic_source import SyntheticSource
 from ..input.video_source import VideoSource
 from ..perception.detector import BeaconDetector
 from ..tracking.tracker import Tracker
+from ..tracking.track_manager import TrackManager
+from ..tracking.identity_state_machine import IdentityStateMachine
 from ..control.camera_controller import CameraController
 from ..evaluation.metrics import MetricsCollector
 from ..evaluation.report import export_run
 from ..evaluation.auto_logger import RobustPerfLogger
 from ..common.enums import TrackingState
+from ..common.types import Detection
+from ..ai.inference import AIInferencePipeline
+from ..ai.types import IdentityState as AIIdentityState
+from ..ai.signatures import signature_score, SignatureConfig
 
 
 class MainWindow(QMainWindow):
@@ -108,6 +115,10 @@ class MainWindow(QMainWindow):
         mid.addWidget(self.world_view, 1)
         root.addLayout(mid, 1)
 
+        # Target tracks & identity panel (Plan §16.5)
+        self.tracks_view = TracksView(self)
+        root.addWidget(self.tracks_view)
+
         # Live Dashboard is now in a separate window (not embedded) — see LiveDashboardWindow
         self.live_window = LiveDashboardWindow(self)
         self.dashboard = self.live_window.dashboard
@@ -143,6 +154,9 @@ class MainWindow(QMainWindow):
         self.source = None
         self.detector = BeaconDetector(self.cfg)
         self.tracker = Tracker(self.cfg)
+        self.track_manager = TrackManager(self.cfg)
+        self.identity_sm = IdentityStateMachine(self.cfg)
+        self.ai_pipeline = AIInferencePipeline(self.cfg)
         self.controller = CameraController(self.cfg)
         self.metrics = MetricsCollector()
         self.auto_logger = RobustPerfLogger(base_dir="outputs/runs", metrics_collector=self.metrics)
@@ -156,6 +170,9 @@ class MainWindow(QMainWindow):
         self.last_detection = None
         self.last_estimate = None
         self.last_gt = None
+        self._ai_candidates = []
+        self._ai_results = []
+        self._ai_tracks = {}
         self._create_source()
 
     def _create_source(self):
@@ -194,6 +211,9 @@ class MainWindow(QMainWindow):
         self.lbl_seed_top.setText(f"seed {self.cfg['experiment']['seed']}")
         self.detector.update_config(self.cfg)
         self.tracker.update_config(self.cfg)
+        self.track_manager.update_config(self.cfg)
+        self.identity_sm = IdentityStateMachine(self.cfg)
+        self.ai_pipeline.update_config(self.cfg)
         self.controller.update_config(self.cfg)
 
     def open_control_deck(self):
@@ -225,11 +245,21 @@ class MainWindow(QMainWindow):
             self.metrics.input_fps = float(self.cfg["camera"]["fps"])
             self.auto_logger.begin_run(self.cfg)
             self.tracker.reset()
+            self.track_manager.reset()
+            self.identity_sm.reset_all()
+            # reset pipeline counters
+            self.ai_pipeline._confirm_counters.clear()
+            self.ai_pipeline._decoy_counters.clear()
+            self._ai_candidates = []
+            self._ai_results = []
+            self._ai_tracks = {}
             self.controller.reset()
             if hasattr(self.source, "reset"):
                 self.source.reset()
             self.world_view.trail.clear()
+            self.world_view.decoy_trails.clear() if hasattr(self.world_view, 'decoy_trails') else None
             self.cam_view._est_trail.clear()
+            self.cam_view.clear_ai_overlays()
             self.last_tick_time = time.perf_counter()
         self.running = True
         self.paused = False
@@ -271,11 +301,21 @@ class MainWindow(QMainWindow):
         self.metrics.reset()
         self.metrics.input_fps = float(self.cfg["camera"]["fps"])
         self.tracker.reset()
+        self.track_manager.reset()
+        self.identity_sm.reset_all()
+        self.ai_pipeline._confirm_counters.clear()
+        self.ai_pipeline._decoy_counters.clear()
+        self._ai_candidates = []
+        self._ai_results = []
+        self._ai_tracks = {}
         self.controller.reset()
         if self.source and hasattr(self.source, "reset"):
             self.source.reset()
         self.world_view.trail.clear()
+        if hasattr(self.world_view, 'decoy_trails'):
+            self.world_view.decoy_trails.clear()
         self.cam_view._est_trail.clear()
+        self.cam_view.clear_ai_overlays()
         self.lbl_state_top.setText("IDLE")
         self.lbl_state_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['muted']}; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
         # full PDF-required reset state
@@ -328,9 +368,130 @@ class MainWindow(QMainWindow):
                 pass
             return
 
+        # ----- AI-enhanced pipeline (Plan §9.1) -----
+        ai_enabled = bool(self.cfg.get("ai", {}).get("enabled", False))
         pred = self.tracker.get_predicted_pixel() if hasattr(self.tracker, "get_predicted_pixel") else None
-        detection = self.detector.detect(frame.image, predicted_pos=pred)
-        estimate = self.tracker.step(detection, frame)
+        detection = None
+        estimate = None
+        ai_primary_ident = None
+
+        if ai_enabled:
+            # multi-candidate generation
+            candidates = self.detector.detect_candidates(frame.image, predicted_pos=pred)
+            # Stage-1 candidate classification (heuristic fallback if no model)
+            try:
+                candidates = self.ai_pipeline.candidate_clf.predict(candidates)
+            except Exception as e:
+                print(f"[AI] candidate clf fallback: {e}")
+            self._ai_candidates = list(candidates)
+            # track management (nearest-neighbor gating, decoy memory)
+            try:
+                tracks = self.track_manager.update(candidates, frame.frame_id, innovation=float(self.tracker.imm.last_nis), imm_probs=tuple(self.tracker.imm.probs))
+            except Exception as e:
+                print(f"[AI] track_manager error: {e}")
+                tracks = dict(self.track_manager.tracks)
+            self._ai_tracks = dict(tracks)
+            # Stage-2 identity per track (+ temporal confirmation)
+            ai_results = []
+            for c in list(candidates):
+                tr = tracks.get(c.candidate_id)
+                if tr is None:
+                    continue
+                try:
+                    sig_score, _dbg = signature_score(tr.blink_history, tr.brightness_history, tr.size_history, self.ai_pipeline.sig_cfg, fps=float(self.cfg["camera"]["fps"]))
+                except Exception:
+                    sig_score = 0.5
+                try:
+                    ident = self.ai_pipeline.identity_clf.predict_for_track(tr, signature_score=sig_score)
+                except Exception as e:
+                    from ..ai.types import IdentityResult, IdentityState as AIState2, IdentityEvidence
+                    ident = IdentityResult(track_id=tr.track_id, primary_probability=0.30, decoy_probability=0.25, unknown_probability=0.45, identity_state=AIState2.UNKNOWN, measurement_quality=0.35, evidence=IdentityEvidence(), model_version="fallback")
+                    ident.evidence.optical_signature_score = float(sig_score)
+                # temporal confirmation via identity state machine (requires N consecutive frames)
+                try:
+                    ident.identity_state = self.identity_sm.update(tr.track_id, ident.primary_probability, ident.decoy_probability, ident.unknown_probability, has_observation=True)
+                except Exception:
+                    pass
+                ident.evidence.optical_signature_score = float(sig_score)
+                if sig_score >= 0.68:
+                    ident.evidence.reasons.append("✓ Correct optical signature")
+                elif sig_score <= 0.42:
+                    ident.evidence.reasons.append("✗ Wrong signature")
+                # motion / stability hints
+                if tr.missed_frames == 0 and len(tr.position_history) >= 3:
+                    ident.evidence.reasons.append("✓ Stable centroid")
+                if float(self.tracker.imm.last_nis) < 5.0:
+                    ident.evidence.reasons.append("✓ Innovation within gate")
+                else:
+                    ident.evidence.reasons.append("✗ High innovation")
+                tr.current_identity = ident.identity_state
+                tr.identity_history.append(ident)
+                if ident.identity_state == AIIdentityState.DECOY_CONFIRMED:
+                    self.track_manager.mark_rejected(tr.track_id)
+                ai_results.append((c, ident))
+            # decay for missed tracks
+            for tid, tr in list(tracks.items()):
+                if tr.missed_frames > 0:
+                    try:
+                        ns = self.identity_sm.update(tid, 0.15, 0.15, 0.70, has_observation=False)
+                        tr.current_identity = ns
+                    except Exception:
+                        pass
+            self._ai_results = list(ai_results)
+            # select PRIMARY_CONFIRMED with highest primary_prob (if multiple)
+            primary_pair = None
+            for c, ident in ai_results:
+                if ident.identity_state == AIIdentityState.PRIMARY_CONFIRMED:
+                    if primary_pair is None or ident.primary_probability > primary_pair[1].primary_probability:
+                        primary_pair = (c, ident)
+            if primary_pair is not None:
+                c_primary, ident_primary = primary_pair
+                ai_primary_ident = ident_primary
+                # innovation gating (Plan §11): large NIS + low identity → reject
+                nis = float(self.tracker.imm.last_nis)
+                if nis > 28 and ident_primary.primary_probability < 0.66:
+                    detection = Detection(valid=False)
+                    estimate = self.tracker.step(detection, frame)
+                    estimate.tracking_state = TrackingState.REACQUIRING
+                else:
+                    detection = Detection(valid=True, centroid_px=c_primary.centroid_px, bbox=c_primary.bbox, confidence=float(ident_primary.measurement_quality), score=float(ident_primary.primary_probability), area=c_primary.area)
+                    estimate = self.tracker.step(detection, frame)
+                    # override single-track state machine to reflect identity (only PRIMARY_CONFIRMED drives LOCKED)
+                    estimate.tracking_state = TrackingState.LOCKED
+            else:
+                detection = Detection(valid=False)
+                estimate = self.tracker.step(detection, frame)
+                # map best AI state to TrackingState for PID safety (never full lock without confirmation)
+                if ai_results:
+                    best_c, best_ident = max(ai_results, key=lambda x: x[1].primary_probability)
+                    bs = best_ident.identity_state
+                    if bs == AIIdentityState.IDENTITY_CHECKING:
+                        estimate.tracking_state = TrackingState.CANDIDATE
+                    elif bs == AIIdentityState.UNKNOWN:
+                        estimate.tracking_state = TrackingState.SEARCHING
+                    elif bs == AIIdentityState.DECOY_CONFIRMED:
+                        estimate.tracking_state = TrackingState.REACQUIRING
+                    elif bs == AIIdentityState.CANDIDATE_FOUND:
+                        estimate.tracking_state = TrackingState.CANDIDATE
+                    else:
+                        estimate.tracking_state = TrackingState.SEARCHING
+                else:
+                    # no candidates at all
+                    estimate.tracking_state = TrackingState.SEARCHING if not candidates else TrackingState.CANDIDATE
+                # safety: reset PID integral when not PRIMARY_CONFIRMED (prevents aggressive drift toward decoy)
+                if estimate.tracking_state != TrackingState.LOCKED:
+                    try:
+                        self.controller.pan_pid.decay_integral(0.96)
+                        self.controller.tilt_pid.decay_integral(0.96)
+                    except Exception:
+                        pass
+        else:
+            # classical single-target path (preserves existing behaviour)
+            self._ai_candidates = []
+            self._ai_results = []
+            self._ai_tracks = {}
+            detection = self.detector.detect(frame.image, predicted_pos=pred)
+            estimate = self.tracker.step(detection, frame)
 
         dt = 1.0 / max(float(self.cfg["camera"]["fps"]), 1)
         cmd = self.controller.step(estimate, dt=dt)
@@ -373,6 +534,17 @@ class MainWindow(QMainWindow):
         centre_offset = None
         if isinstance(self.source, VideoSource):
             centre_offset = (self.source.centre_offset_x, self.source.centre_offset_y)
+        # AI overlays for Camera FOV (Plan §16.3-16.5)
+        if ai_enabled:
+            try:
+                self.cam_view.set_ai_overlays(self._ai_candidates, self._ai_results)
+            except Exception:
+                pass
+        else:
+            try:
+                self.cam_view.clear_ai_overlays()
+            except Exception:
+                pass
         self.cam_view.set_frame(frame.image, detection=detection, estimate=estimate, show_overlays=self.chk_overlays.isChecked(), meta=meta, centre_offset=centre_offset)
 
         world_pos = gt.world_pos if gt and gt.world_pos != (0, 0) else None
@@ -389,11 +561,43 @@ class MainWindow(QMainWindow):
                 pass
         cam_for_world = self.source.camera if isinstance(self.source, SyntheticSource) else None
         if cam_for_world:
-            self.world_view.update_state(cam_for_world, world_pos)
+            # pass AI tracks for decoy trails in World FOV (Plan §16.4)
+            ai_tracks_for_view = list(self._ai_tracks.values()) if ai_enabled and hasattr(self, '_ai_tracks') else None
+            self.world_view.update_state(cam_for_world, world_pos, ai_tracks=ai_tracks_for_view)
+        # update target-tracks table (Plan §16.5)
+        try:
+            if ai_enabled and hasattr(self, 'tracks_view'):
+                self.tracks_view.update_tracks(getattr(self, '_ai_results', []), getattr(self, '_ai_tracks', {}))
+            elif hasattr(self, 'tracks_view'):
+                self.tracks_view.clear()
+        except Exception as e:
+            print(f"[TracksView] update failed: {e}")
 
-        # top bar state
-        state = estimate.tracking_state.value
-        col = STATE_COLORS.get(state, COLORS["muted"])
+        # top bar state — AI-aware labels per Plan §16.2 (never bare LOCKED for unconfirmed)
+        if ai_enabled:
+            if ai_primary_ident is not None and ai_primary_ident.identity_state.value == "PRIMARY_CONFIRMED":
+                state = "TRACKING PRIMARY"
+                col = STATE_COLORS.get("LOCKED", COLORS["muted"])
+            elif estimate.tracking_state == TrackingState.CANDIDATE:
+                state = "TRACKING UNCONFIRMED"
+                col = STATE_COLORS.get("CANDIDATE", COLORS["muted"])
+            elif estimate.tracking_state == TrackingState.SEARCHING and getattr(self, '_ai_results', None) and len(self._ai_results) > 0:
+                state = "IDENTITY_CHECKING"
+                col = COLORS.get("accent", "#2563EB")
+            elif estimate.tracking_state == TrackingState.REACQUIRING:
+                state = "RE-ACQUIRING"
+                col = STATE_COLORS.get("REACQUIRING", COLORS["muted"])
+            elif estimate.tracking_state == TrackingState.TEMP_LOST:
+                state = "TARGET LOST"
+                col = STATE_COLORS.get("TEMP_LOST", COLORS["muted"])
+            else:
+                state = estimate.tracking_state.value
+                col = STATE_COLORS.get(state, COLORS["muted"])
+            if ai_primary_ident is not None:
+                self.lbl_state_top.setToolTip(f"Primary {ai_primary_ident.primary_probability*100:.0f}%  sig {ai_primary_ident.evidence.optical_signature_score*100:.0f}%")
+        else:
+            state = estimate.tracking_state.value
+            col = STATE_COLORS.get(state, COLORS["muted"])
         self.lbl_state_top.setText(state)
         self.lbl_state_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {col}; color:{col}; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
         self.lbl_fps_top.setText(f"{self.fps_smooth:.1f} FPS")

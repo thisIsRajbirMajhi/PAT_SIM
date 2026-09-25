@@ -23,6 +23,7 @@ class ControlDeck(QDialog):
         self.tabs.addTab(self._estimator_tab(), "Estimator & Controller")
         self.tabs.addTab(self._env_tab(), "Environment")
         self.tabs.addTab(self._disturb_tab(), "Disturbances")
+        self.tabs.addTab(self._ai_tab(), "AI / Identity")
         self.tabs.addTab(self._input_tab(), "Input/Logging")
 
         btns = QHBoxLayout()
@@ -279,6 +280,20 @@ class ControlDeck(QDialog):
             self.video_path_edit.setText(self.cfg["experiment"].get("video_path",""))
             self.vid_centre_x_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_x",0)))
             self.vid_centre_y_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_y",0)))
+            # AI
+            ai = self.cfg.get("ai", {})
+            thr = ai.get("thresholds", {})
+            sig = ai.get("signatures", ai.get("signature", {})) if isinstance(ai, dict) else {}
+            self.ai_enabled_check.setChecked(bool(ai.get("enabled", False)))
+            self.primary_thr_spin.setValue(float(thr.get("primary_threshold",0.85)))
+            self.decoy_thr_spin.setValue(float(thr.get("decoy_threshold",0.85)))
+            self.confirm_spin.setValue(int(thr.get("confirmation_frames",5)))
+            self.blink_edit.setText(str(sig.get("blink_pattern","10110010")))
+            self.freq_spin.setValue(float(sig.get("modulation_freq_hz",12.0)))
+            self.freq_tol_spin.setValue(float(sig.get("freq_tolerance",0.05)))
+            self.sig_enabled_check.setChecked(bool(sig.get("enabled", True)))
+            self.candidate_model_edit.setText(str(ai.get("candidate_model_path","")))
+            self.identity_model_edit.setText(str(ai.get("identity_model_path","")))
         except Exception as e:
             print(f"[ControlDeck] _refresh_all_fields failed: {e}")
 
@@ -593,6 +608,48 @@ class ControlDeck(QDialog):
         f.addRow(QLabel("Max Jitter ±20 px/frame → Camera tab")); f.addRow(QLabel("Platform ±20 px/f → Environment tab (Linear def, +Circular/Random/Spiral/Figure-8)"))
         return w
 
+    def _ai_tab(self):
+        w = QWidget(); f = QFormLayout(w)
+        ai = self.cfg.get("ai", {})
+        thr = ai.get("thresholds", {})
+        sig = ai.get("signatures", ai.get("signature", {})) if isinstance(ai, dict) else {}
+        self.ai_enabled_check = QCheckBox("Enable AI (MobileNet + GRU + Identity)")
+        self.ai_enabled_check.setChecked(bool(ai.get("enabled", False)))
+        self.ai_enabled_check.setStyleSheet("font-weight:700;")
+        f.addRow(self.ai_enabled_check)
+        f.addRow(QLabel("When OFF, system runs classical detector → EKF-IMM → PID only."))
+
+        # Thresholds
+        self.primary_thr_spin = QDoubleSpinBox(); self.primary_thr_spin.setRange(0.5,0.99); self.primary_thr_spin.setSingleStep(0.05); self.primary_thr_spin.setValue(float(thr.get("primary_threshold",0.85)))
+        self.decoy_thr_spin = QDoubleSpinBox(); self.decoy_thr_spin.setRange(0.5,0.99); self.decoy_thr_spin.setSingleStep(0.05); self.decoy_thr_spin.setValue(float(thr.get("decoy_threshold",0.85)))
+        self.confirm_spin = QSpinBox(); self.confirm_spin.setRange(1,15); self.confirm_spin.setValue(int(thr.get("confirmation_frames",5)))
+        f.addRow("Primary threshold", self.primary_thr_spin)
+        f.addRow("Decoy threshold", self.decoy_thr_spin)
+        f.addRow("Confirmation frames", self.confirm_spin)
+        f.addRow(QLabel("Need N consecutive frames above threshold before PRIMARY/DECOY_CONFIRMED (Plan §6)."))
+
+        # Signatures
+        self.blink_edit = QLineEdit(str(sig.get("blink_pattern", "10110010")))
+        self.blink_edit.setPlaceholderText("10110010")
+        self.freq_spin = QDoubleSpinBox(); self.freq_spin.setRange(1,30); self.freq_spin.setSingleStep(1); self.freq_spin.setValue(float(sig.get("modulation_freq_hz",12.0)))
+        self.freq_tol_spin = QDoubleSpinBox(); self.freq_tol_spin.setRange(0.01,0.20); self.freq_tol_spin.setSingleStep(0.01); self.freq_tol_spin.setValue(float(sig.get("freq_tolerance",0.05)))
+        self.sig_enabled_check = QCheckBox("Signatures enabled")
+        self.sig_enabled_check.setChecked(bool(sig.get("enabled", True)))
+        f.addRow("Blink pattern", self.blink_edit)
+        f.addRow("Modulation freq (Hz)", self.freq_spin)
+        f.addRow("Freq tolerance (±)", self.freq_tol_spin)
+        f.addRow(self.sig_enabled_check)
+        f.addRow(QLabel("Primary must have blink/freq that decoys don't share. Brightness alone never confirms (Plan §3)."))
+
+        # Info: model paths
+        self.candidate_model_edit = QLineEdit(str(ai.get("candidate_model_path","")))
+        self.candidate_model_edit.setPlaceholderText("models/candidate_classifier/best.onnx  (empty = heuristic)")
+        self.identity_model_edit = QLineEdit(str(ai.get("identity_model_path","")))
+        self.identity_model_edit.setPlaceholderText("models/identity_classifier/best.onnx  (empty = heuristic voter)")
+        f.addRow("Candidate model", self.candidate_model_edit)
+        f.addRow("Identity model", self.identity_model_edit)
+        return w
+
     def _input_tab(self):
         w = QWidget(); f = QFormLayout(w)
         self.input_combo = QComboBox(); self.input_combo.addItems(["SYNTHETIC","VIDEO"]); self.input_combo.setCurrentText(self.cfg["experiment"]["input_mode"])
@@ -730,5 +787,31 @@ class ControlDeck(QDialog):
         c["experiment"]["video_path"] = self.video_path_edit.text().strip()
         c["camera"]["video_centre_offset_x"] = float(self.vid_centre_x_spin.value())
         c["camera"]["video_centre_offset_y"] = float(self.vid_centre_y_spin.value())
+        # AI
+        if "ai" not in c:
+            c["ai"] = {}
+        c["ai"]["enabled"] = bool(self.ai_enabled_check.isChecked())
+        if "thresholds" not in c["ai"]:
+            c["ai"]["thresholds"] = {}
+        c["ai"]["thresholds"]["primary_threshold"] = float(self.primary_thr_spin.value())
+        c["ai"]["thresholds"]["decoy_threshold"] = float(self.decoy_thr_spin.value())
+        c["ai"]["thresholds"]["confirmation_frames"] = int(self.confirm_spin.value())
+        if "signatures" not in c["ai"]:
+            c["ai"]["signatures"] = {}
+        c["ai"]["signatures"]["blink_pattern"] = self.blink_edit.text().strip() or "10110010"
+        c["ai"]["signatures"]["modulation_freq_hz"] = float(self.freq_spin.value())
+        c["ai"]["signatures"]["freq_tolerance"] = float(self.freq_tol_spin.value())
+        c["ai"]["signatures"]["enabled"] = bool(self.sig_enabled_check.isChecked())
+        c["ai"]["candidate_model_path"] = self.candidate_model_edit.text().strip()
+        c["ai"]["identity_model_path"] = self.identity_model_edit.text().strip()
+        # mirror to primary_target for World blink simulation
+        if "primary_target" not in c:
+            c["primary_target"] = {}
+        if "optical_signature" not in c["primary_target"]:
+            c["primary_target"]["optical_signature"] = {}
+        c["primary_target"]["optical_signature"]["blink_pattern"] = c["ai"]["signatures"]["blink_pattern"]
+        c["primary_target"]["optical_signature"]["modulation_freq_hz"] = c["ai"]["signatures"]["modulation_freq_hz"]
+        c["primary_target"]["optical_signature"]["freq_tolerance"] = c["ai"]["signatures"]["freq_tolerance"]
+        c["primary_target"]["optical_signature"]["enabled"] = c["ai"]["signatures"]["enabled"]
         self.configApplied.emit(c)
         self.accept()

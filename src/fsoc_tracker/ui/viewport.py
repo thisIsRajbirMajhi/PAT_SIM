@@ -29,11 +29,22 @@ class CameraView(QWidget):
         self._meta = {}  # fps, fov, res, etc.
         self.show_reticle = True
         self.show_grid = False
+        # AI multi-candidate overlays (Plan §16.3)
+        self._ai_candidates = []  # List[Candidate]
+        self._ai_results = []     # List[(Candidate, IdentityResult)]
         self.setMinimumSize(560, 420)
         from PyQt5.QtWidgets import QSizePolicy
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
+
+    def set_ai_overlays(self, candidates, results):
+        self._ai_candidates = list(candidates or [])
+        self._ai_results = list(results or [])
+
+    def clear_ai_overlays(self):
+        self._ai_candidates = []
+        self._ai_results = []
 
     def set_frame(self, frame_gray, detection=None, estimate=None, world_camera=None, show_overlays=True, meta=None, centre_offset=None):
         if frame_gray is None:
@@ -102,8 +113,37 @@ class CameraView(QWidget):
                     cv2.line(overlay, (cx + d, cy - 4), (cx + d, cy + 4), (148, 163, 184), 1, cv2.LINE_AA)
                     cv2.line(overlay, (cx - 4, cy + d), (cx + 4, cy + d), (148, 163, 184), 1, cv2.LINE_AA)
 
-            # --- detection: bbox + cross + label ---
-            if detection and detection.valid and detection.centroid_px:
+            # --- AI multi-candidate overlays (Plan §16.3) ---
+            if getattr(self, '_ai_results', None):
+                # map identity state -> BGR color + label
+                for c, ident in self._ai_results:
+                    st = ident.identity_state.value if ident else "UNKNOWN"
+                    if st == "PRIMARY_CONFIRMED":
+                        col = (40, 180, 70)   # green
+                    elif st == "DECOY_CONFIRMED":
+                        col = (38, 38, 220)   # red
+                    elif st == "UNKNOWN":
+                        col = (139, 116, 100) # gray
+                    elif st == "IDENTITY_CHECKING":
+                        col = (212, 182, 6)   # cyan/ amber
+                    else:
+                        col = (8, 179, 234)   # yellow candidate
+                    bx, by, bw, bh = c.bbox
+                    cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), col, 1, cv2.LINE_AA)
+                    # ID + score
+                    label = f"ID{c.candidate_id} {st[:3]} {ident.primary_probability*100:.0f}%" if ident else f"ID{c.candidate_id}"
+                    cv2.putText(overlay, label, (bx, max(12, by - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1, cv2.LINE_AA)
+                    # centroid dot
+                    x, y = int(round(c.centroid_px[0])), int(round(c.centroid_px[1]))
+                    cv2.circle(overlay, (x, y), 4, col, -1, cv2.LINE_AA)
+                    cv2.circle(overlay, (x, y), 7, col, 1, cv2.LINE_AA)
+            elif getattr(self, '_ai_candidates', None):
+                for c in self._ai_candidates:
+                    bx, by, bw, bh = c.bbox
+                    cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), (8, 179, 234), 1, cv2.LINE_AA)
+                    cv2.circle(overlay, (int(c.centroid_px[0]), int(c.centroid_px[1])), 4, (8, 179, 234), -1, cv2.LINE_AA)
+            # --- detection: bbox + cross + label (classical fallback when AI disabled) ---
+            if (not getattr(self, '_ai_results', None) and not getattr(self, '_ai_candidates', None)) and detection and detection.valid and detection.centroid_px:
                 x, y = int(round(detection.centroid_px[0])), int(round(detection.centroid_px[1]))
                 # bbox
                 if detection.bbox:
@@ -297,13 +337,16 @@ class WorldView(QWidget):
         self.camera_center = (world_size[0]/2, world_size[1]/2)
         self.world_pos = None
         self.trail = []
+        # AI multi-target decoy trails (Plan §16.4)
+        self.decoy_trails = {}  # track_id -> list[(x,y)]
+        self.ai_tracks_snapshot = []
         self.setMinimumSize(560, 420)
         from PyQt5.QtWidgets import QSizePolicy
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
 
-    def update_state(self, camera, world_pos, trail=None):
+    def update_state(self, camera, world_pos, trail=None, ai_tracks=None):
         if camera is not None:
             self.camera_bounds = camera.get_viewport_bounds()
             self.camera_center = tuple(camera.center_world)
@@ -312,6 +355,24 @@ class WorldView(QWidget):
             self.trail.append(tuple(world_pos))
             if len(self.trail) > 220:
                 self.trail.pop(0)
+        # AI decoy trails
+        if ai_tracks is not None:
+            self.ai_tracks_snapshot = list(ai_tracks)
+            for tr in ai_tracks:
+                tid = getattr(tr, 'track_id', None)
+                if tid is None:
+                    continue
+                last = tr.position_history[-1] if getattr(tr, 'position_history', None) else None
+                if last is None:
+                    continue
+                self.decoy_trails.setdefault(tid, []).append(tuple(last))
+                if len(self.decoy_trails[tid]) > 120:
+                    self.decoy_trails[tid].pop(0)
+            # prune missing tracks
+            alive = {getattr(t, 'track_id', -1) for t in ai_tracks}
+            for k in list(self.decoy_trails.keys()):
+                if k not in alive:
+                    self.decoy_trails.pop(k, None)
         self.update()
 
     def paintEvent(self, event):
@@ -387,7 +448,7 @@ class WorldView(QWidget):
         p.drawLine(arrow.center().x(), arrow.bottom() + 2, arrow.center().x(), arrow.bottom() + 10)
         pts = [arrow.center() + p for p in [QPoint(0,-6), QPoint(-4,0), QPoint(4,0)] ]  # not used
 
-        # trail — amber with fade
+        # trail — amber with fade (primary)
         if len(self.trail) > 1:
             for i in range(1, len(self.trail)):
                 a = i / len(self.trail)
@@ -399,6 +460,42 @@ class WorldView(QWidget):
                 x1 = ox + self.trail[i][0] * scale
                 y1 = oy + self.trail[i][1] * scale
                 p.drawLine(int(x0), int(y0), int(x1), int(y1))
+        # AI decoy trails (red / gray per identity)
+        if getattr(self, 'decoy_trails', None):
+            for tid, trail in self.decoy_trails.items():
+                if len(trail) < 2:
+                    continue
+                # find identity for color
+                ident = None
+                for tr in getattr(self, 'ai_tracks_snapshot', []):
+                    if getattr(tr, 'track_id', None) == tid:
+                        ident = getattr(tr, 'current_identity', None)
+                        break
+                ival = str(ident) if ident else "UNKNOWN"
+                if "PRIMARY" in ival:
+                    base_col = QColor(34, 150, 80, 160)
+                elif "DECOY" in ival:
+                    base_col = QColor(190, 40, 40, 140)
+                else:
+                    base_col = QColor(100, 116, 139, 120)
+                for i in range(1, len(trail)):
+                    p.setPen(QPen(base_col, 1, Qt.DotLine, Qt.RoundCap))
+                    x0 = ox + trail[i-1][0] * scale
+                    y0 = oy + trail[i-1][1] * scale
+                    x1 = ox + trail[i][0] * scale
+                    y1 = oy + trail[i][1] * scale
+                    p.drawLine(int(x0), int(y0), int(x1), int(y1))
+                # endpoint marker with ID
+                if trail:
+                    tx, ty = trail[-1]
+                    px, py = ox + tx * scale, oy + ty * scale
+                    p.setPen(QPen(base_col, 1))
+                    p.setBrush(base_col)
+                    p.drawEllipse(int(px)-3, int(py)-3, 6, 6)
+                    p.setPen(QColor("#333333"))
+                    f_id = QFont("JetBrains Mono, Consolas", 6)
+                    p.setFont(f_id)
+                    p.drawText(int(px)+6, int(py)-4, f"#{tid}")
 
         # camera footprint — blue, with header label
         if self.camera_bounds:

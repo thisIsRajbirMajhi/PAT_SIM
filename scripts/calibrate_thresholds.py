@@ -10,6 +10,11 @@ Uses validation set to:
 Usage:
   python scripts/calibrate_thresholds.py --config configs/training.yaml
 """
+import os, sys
+_this = os.path.dirname(__file__)
+_src = os.path.abspath(os.path.join(_this, "..", "src"))
+if _src not in sys.path:
+    sys.path.insert(0, _src)
 import argparse
 import pathlib
 import yaml

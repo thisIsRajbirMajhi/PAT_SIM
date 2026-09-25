@@ -7,8 +7,15 @@ outputs/runs/*
 !outputs/runs/.gitkeep
 data/input_videos/*.mp4
 !data/input_videos/.gitkeep
+# AI datasets — keep manifests, ignore bulk patches/sequences (regenerable via scripts/generate_training_data.py)
+data/datasets/candidate_patches/patches/*.npy
+data/datasets/candidate_patches/patches/*.npz
+data/datasets/track_sequences/*.npz
+# keep .jsonl and generation_manifest.json tracked if desired; comment next line to track them too
+# data/datasets/**/*.jsonl
 dist/
 build/
 *.egg-info/
 .pytest_cache/
 Resources
+Plan/

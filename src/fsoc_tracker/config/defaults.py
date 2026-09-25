@@ -91,6 +91,52 @@ DEFAULT_CONFIG = {
         "feedforward_gain": 0.0,
     },
     "experiment": {"duration_s": 30.0, "seed": 42, "input_mode": "SYNTHETIC", "video_path": ""},
+    # --- AI / Identity (Plan §3, §6) ---
+    "ai": {
+        "enabled": False,
+        "patch_size": 64,
+        "sequence_length": 25,
+        "gru_hidden": 64,
+        "inference_timeout_ms": 40,
+        "fallback_on_failure": True,
+        "candidate_model_path": "",
+        "identity_model_path": "",
+        "thresholds": {
+            "primary_threshold": 0.85,
+            "decoy_threshold": 0.85,
+            "confirmation_frames": 5,
+            "unknown_low": 0.45,
+            "unknown_high": 0.85,
+        },
+        "weights": {
+            "appearance": 0.20,
+            "motion": 0.20,
+            "temporal": 0.20,
+            "signature": 0.25,
+            "estimator": 0.15,
+        },
+    },
+    "primary_target": {
+        "shape": "square",
+        "size_px": 10,
+        "brightness_range": [180, 255],
+        "allowed_motion": ["straight", "circular", "figure_eight", "random"],
+        "max_speed_px_per_frame": 20.0,
+        "optical_signature": {
+            "enabled": True,
+            "blink_pattern": "10110010",
+            "modulation_freq_hz": 12.0,
+            "freq_tolerance": 0.05,
+        },
+    },
+    "decoys": {
+        "enabled": False,
+        "count": 2,
+        "profiles": [
+            {"type": "reflection", "brightness_range": [190, 255], "blink_pattern": "11100011", "freq_hz": 8.0},
+            {"type": "noise_blob", "shape": "irregular"},
+        ],
+    },
 }
 # Limits reference (enforced in Control Deck & schema):
 # World 1000-4000 (spec min 2000), default 2000

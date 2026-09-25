@@ -12,6 +12,11 @@ Also runs ablation variants A-F (Plan §9.2 Step 9):
 Usage:
   python scripts/evaluate_ai_models.py --config configs/training.yaml --split test
 """
+import os, sys
+_this = os.path.dirname(__file__)
+_src = os.path.abspath(os.path.join(_this, "..", "src"))
+if _src not in sys.path:
+    sys.path.insert(0, _src)
 import argparse
 import pathlib
 import yaml
