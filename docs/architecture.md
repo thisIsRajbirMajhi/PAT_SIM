@@ -171,7 +171,7 @@ PAT_SIM/
 |   +-- ui/
 |       +-- app.py                 # MainWindow — top bar, two viewports, dashboard, timers
 |       +-- viewport.py            # CameraFOV + WorldFOV rendering with overlays
-|       +-- control_deck.py        # Sliding Control Deck drawer — 7 tabs
+|       +-- control_deck.py        # Two-portion Control Deck dialog (AI + deterministic)
 |       +-- dashboard.py           # Metrics + IMM probs + PID + conditions panel
 |       +-- benchmark_dialog.py
 |       +-- live_dashboard_window.py
@@ -324,7 +324,7 @@ Search mode (SEARCHING/REACQUIRING/FAILED): expanding spiral `pan=cos(theta)*r*0
 
 ### 5.10 UI (`ui/`)
 
-`MainWindow` owns two `Viewport` widgets (Camera FOV with reticle + yellow detection + green/cyan estimate + error vector; World FOV with yellow trail + cyan footprint), top bar (mode, state, seed, FPS, RUN/PAUSE/RESET/CONTROL DECK), `Dashboard` (accuracy, timing, lock/acq, IMM probs, PID, conditions), and sliding `ControlDeck` drawer (7 tabs: Presets, Target, Camera, Estimator/Controller, Environment, Disturbances, Input/Logging). A 30 Hz `QTimer` drives `pipeline_step()` separately from rendering.
+`MainWindow` owns two `Viewport` widgets (Camera FOV with reticle + yellow detection + green/cyan estimate + error vector; World FOV with yellow trail + cyan footprint), top bar (mode, state, seed, FPS, RUN/PAUSE/RESET/CONTROL DECK), `Dashboard` (accuracy, timing, lock/acq, IMM probs, PID, conditions), and a two-portion `ControlDeck` dialog (**AI System** and **Deterministic / Classical**, each with independently staged parameter groups). A 30 Hz `QTimer` drives `pipeline_step()` separately from rendering.
 
 ---
 
@@ -351,7 +351,7 @@ All modules exchange these typed objects, not bare dicts.
 
 ## 7. Configuration Flow
 
-`configs/default.yaml` (or overlay `high_noise.yaml`) -> `config/loader.py` loads YAML, deep-merges with `DEFAULT_CONFIG` from `config/defaults.py` -> `validate_config()` asserts spec ranges -> passed to `World`, `VirtualCamera`, `BeaconDetector`, `Tracker`, `CameraController`, `MetricsCollector`. Live Control Deck edits call each component's `update_config(cfg)` without restart; `World._build_base` only rebuilds if environment/world fields change.
+`configs/presets/<curated>.yaml` (or a benchmark file under `configs/benchmarks/`) -> `config/loader.py` loads YAML, deep-merges with `DEFAULT_CONFIG` from `config/defaults.py` -> `validate_config()` asserts spec ranges -> passed to `World`, `VirtualCamera`, `BeaconDetector`, `Tracker`, `CameraController`, `MetricsCollector`. `config/presets.py` discovers only curated GUI files and assigns each to the AI or deterministic Control Deck portion; live Control Deck edits from the active portion call each component's `update_config(cfg)` without restart; `World._build_base` only rebuilds if environment/world fields change.
 
 ---
 

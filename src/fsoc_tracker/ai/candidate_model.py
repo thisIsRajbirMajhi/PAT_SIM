@@ -30,19 +30,36 @@ import numpy as np
 from .types import Candidate, CandidateClass
 from .features import PATCH_SIZE
 
-# Lazy optional deps — do not hard-require torch for synthetic runs
-try:
-    import torch  # type: ignore
-    import torch.nn as nn  # type: ignore
-    HAS_TORCH = True
-except Exception:
-    HAS_TORCH = False
+# Optional dependencies are loaded lazily. Importing this module must never
+# import torch/onnxruntime; those runtimes are only loaded when a model file
+# is configured below.
+_TORCH_STATE = {"loaded": False, "ok": False, "torch": None, "nn": None}
+_ONNX_STATE = {"loaded": False, "ok": False, "module": None}
 
-try:
-    import onnxruntime as ort  # type: ignore
-    HAS_ONNX = True
-except Exception:
-    HAS_ONNX = False
+
+def _load_torch():
+    """Import torch on demand; return (torch, nn) or None."""
+    if not _TORCH_STATE["loaded"]:
+        try:
+            import torch  # type: ignore
+            import torch.nn as nn  # type: ignore
+            _TORCH_STATE.update({"loaded": True, "ok": True, "torch": torch, "nn": nn})
+        except Exception:
+            _TORCH_STATE.update({"loaded": True, "ok": False, "torch": None, "nn": None})
+    if _TORCH_STATE["ok"]:
+        return (_TORCH_STATE["torch"], _TORCH_STATE["nn"])
+    return None
+
+
+def _load_onnxruntime():
+    """Import onnxruntime on demand; return the module or None."""
+    if not _ONNX_STATE["loaded"]:
+        try:
+            import onnxruntime as ort  # type: ignore
+            _ONNX_STATE.update({"loaded": True, "ok": True, "module": ort})
+        except Exception:
+            _ONNX_STATE.update({"loaded": True, "ok": False, "module": None})
+    return _ONNX_STATE["module"] if _ONNX_STATE["ok"] else None
 
 
 # ------------------------------------------------------------------ fallback
@@ -68,7 +85,10 @@ def _heuristic_classify(c: Candidate) -> Tuple[CandidateClass, float, float]:
 
 
 # -------------------------------------------------------------- torch model
-if HAS_TORCH:
+def _build_torch_candidate(torch_deps, num_classes: int = 4, embed_dim: int = 128):
+    """Construct the Stage-1 torch model after torch has been loaded lazily."""
+    torch, nn = torch_deps
+
     class MobileNetV3SmallPatch(nn.Module):  # type: ignore
         """
         Thin wrapper around torchvision MobileNetV3-Small adapted for
@@ -76,7 +96,7 @@ if HAS_TORCH:
         2-layer MLP fused before the classifier head.
         Only instantiated during training or when torch weights are present.
         """
-        def __init__(self, num_classes: int = 4, embed_dim: int = 128):
+        def __init__(self, num_classes: int = num_classes, embed_dim: int = embed_dim):
             super().__init__()
             try:
                 from torchvision.models import mobilenet_v3_small  # type: ignore
@@ -116,6 +136,8 @@ if HAS_TORCH:
             qual = self.quality_head(h).squeeze(1)
             return logits, qual, emb
 
+    return MobileNetV3SmallPatch(num_classes=num_classes, embed_dim=embed_dim)
+
 
 # -------------------------------------------------------------- public classifier
 _CLASS_ORDER = [CandidateClass.BEACON_LIKE, CandidateClass.DECOY_LIKE, CandidateClass.NOISE, CandidateClass.UNKNOWN]
@@ -134,28 +156,40 @@ class CandidateClassifier:
         self.timeout_ms: int = int(ai.get("inference_timeout_ms", 40))
         self.patch_size: int = int(ai.get("patch_size", PATCH_SIZE))
         self.device = "cpu"
+        self._torch = None
         self._torch_model = None
         self._ort_session = None
 
         if not self.enabled:
             return
+        # Only load an optional runtime when a model file is actually configured.
         # try ONNX first (preferred for deployment)
-        if self.model_path and self.model_path.endswith(".onnx") and HAS_ONNX:
-            try:
-                self._ort_session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
-            except Exception as e:
-                print(f"[CandidateClassifier] ONNX load failed ({self.model_path}): {e}; using heuristic.")
-        elif self.model_path and self.model_path.endswith((".pt", ".pth")) and HAS_TORCH:
-            try:
-                ckpt = torch.load(self.model_path, map_location="cpu")  # type: ignore
-                m = MobileNetV3SmallPatch()
-                # tolerate checkpoint dict variations
-                state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
-                m.load_state_dict(state, strict=False)
-                m.eval()
-                self._torch_model = m
-            except Exception as e:
-                print(f"[CandidateClassifier] Torch load failed ({self.model_path}): {e}; using heuristic.")
+        if self.model_path and self.model_path.endswith(".onnx"):
+            ort = _load_onnxruntime()
+            if ort is None:
+                print(f"[CandidateClassifier] ONNX Runtime unavailable ({self.model_path}); using heuristic.")
+            else:
+                try:
+                    self._ort_session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
+                except Exception as e:
+                    print(f"[CandidateClassifier] ONNX load failed ({self.model_path}): {e}; using heuristic.")
+        elif self.model_path and self.model_path.endswith((".pt", ".pth")):
+            torch_deps = _load_torch()
+            if torch_deps is None:
+                print(f"[CandidateClassifier] PyTorch unavailable ({self.model_path}); using heuristic.")
+            else:
+                torch, _nn = torch_deps
+                try:
+                    ckpt = torch.load(self.model_path, map_location="cpu")  # type: ignore
+                    m = _build_torch_candidate(torch_deps)
+                    # tolerate checkpoint dict variations
+                    state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+                    m.load_state_dict(state, strict=False)
+                    m.eval()
+                    self._torch = torch
+                    self._torch_model = m
+                except Exception as e:
+                    print(f"[CandidateClassifier] Torch load failed ({self.model_path}): {e}; using heuristic.")
 
     # -- single candidate -------------------------------------------------
     def _infer_heuristic(self, c: Candidate) -> Candidate:
@@ -223,8 +257,8 @@ class CandidateClassifier:
             c.appearance_embedding = emb[0].astype(np.float32) if emb.size else c.appearance_embedding
             return c
         # Torch path
-        if self._torch_model is not None and HAS_TORCH:
-            import torch as _torch  # type: ignore
+        if self._torch_model is not None and self._torch is not None:
+            _torch = self._torch
             patch = c.patch if c.patch is not None else np.zeros((64, 64), np.float32)
             patch_t = _torch.from_numpy(patch).unsqueeze(0).unsqueeze(0)  # (1,1,64,64)
             from .features import numerical_features as _nf

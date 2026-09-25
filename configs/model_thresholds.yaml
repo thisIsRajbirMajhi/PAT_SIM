@@ -2,9 +2,9 @@ thresholds:
   primary_threshold: 0.85
   decoy_threshold: 0.85
   confirmation_frames: 5
-candidate_threshold: 0.50
+candidate_threshold: 0.5
 temperature: 1.12
 val_ece: 0.04
-val_primary_f1: 0.88
+val_primary_f1: 0.7855361596009975
 val_false_lock_rate: 0.02
-calibrated_at: '2026-09-25T07:26:10Z'
+calibrated_at: '2026-09-25T10:41:35Z'

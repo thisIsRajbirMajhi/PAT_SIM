@@ -1,0 +1,70 @@
+# Curated GUI preset: classical single-target path with AI explicitly disabled.
+preset_meta:
+  preset: classical_baseline
+  display_name: Classical — Clean Baseline
+  order: 20
+  system: "deterministic"
+  ai_mode: "OFF"
+  purpose: Verify the original detector → EKF-IMM → PID path without AI or decoys.
+  expected:
+    targets: 1
+    identity: "Classical tracking only"
+
+experiment:
+  seed: 42
+  duration_s: 30.0
+  input_mode: SYNTHETIC
+  video_path: ""
+
+target:
+  count: 1
+  shape: square
+  size: 10
+  initial_mode: user-defined
+  initial_pos: [1000, 1000]
+  trajectory: straight
+  speed_px_per_frame: 1.5
+  angle_deg: 0.0
+  radius: 160.0
+  intensity: 255
+
+platform:
+  type: none
+  speed_px_per_frame: 0.0
+
+noise:
+  gaussian_enabled: false
+  gaussian_std: 0.0
+  salt_pepper_enabled: false
+  salt_pepper_prob: 0.0
+  poisson: false
+
+atmosphere:
+  type: clear
+  strength: 0.0
+
+ai:
+  enabled: false
+  fallback_on_failure: true
+  candidate_model_path: ""
+  identity_model_path: ""
+  thresholds:
+    primary_threshold: 0.85
+    decoy_threshold: 0.85
+    confirmation_frames: 5
+    unknown_low: 0.45
+    unknown_high: 0.85
+  signatures:
+    enabled: true
+    blink_enabled: true
+    blink_pattern: "10110010"
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    expected_shape: square
+    size_range_px: [5, 20]
+    persistence_frames: 5
+
+decoys:
+  enabled: false
+  count: 0
+  profiles: []

@@ -16,14 +16,15 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 CONFIGS_DIR = os.path.join(ROOT, "configs")
+BENCHMARKS_DIR = os.path.join(CONFIGS_DIR, "benchmarks")
 
 # ---------- fixtures ----------
 
 @pytest.fixture(scope="session")
 def all_preset_paths():
-    """All P01-P12 preset paths sorted."""
-    paths = sorted(glob.glob(os.path.join(CONFIGS_DIR, "P*.yaml")))
-    # Fallback to any yaml
+    """All benchmark-only P01-P12 scenario paths sorted."""
+    paths = sorted(glob.glob(os.path.join(BENCHMARKS_DIR, "P*.yaml")))
+    # Keep the fixture useful if the benchmark directory is temporarily absent.
     if not paths:
         paths = sorted(glob.glob(os.path.join(CONFIGS_DIR, "*.yaml")))
     return paths

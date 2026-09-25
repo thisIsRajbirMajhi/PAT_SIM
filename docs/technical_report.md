@@ -162,7 +162,8 @@ Control errors are taken from the **fused IMM angular estimate** (`alpha_hat, be
 
 ```
 PAT_SIM/
-  configs/{default,high_noise}.yaml
+  configs/presets/                 # curated GUI presets
+  configs/benchmarks/              # P01-P12 regression scenarios
   src/fsoc_tracker/
     common/{types,enums,constants,clock,random_state}.py
     config/{defaults,schema,loader}.py
@@ -282,7 +283,7 @@ Both implement `FrameSource.read() -> Frame(image, frame_id, timestamp, source_n
 
 ### 3.10 UI (`ui/`)
 
-`MainWindow` in `ui/app.py` owns: top bar (mode, preset, seed, state, FPS, RUN/PAUSE/RESET/CONTROL DECK), two `Viewport` widgets (Camera FOV with reticle + yellow detection + green/cyan estimate + error vector; World FOV with yellow trail + cyan footprint), `Dashboard` (state, accuracy, timing, lock/acq, IMM probs, PID, conditions), and the sliding `ControlDeck` drawer with 7 tabs. A 30 Hz `QTimer` drives `pipeline_step()` independently.
+`MainWindow` in `ui/app.py` owns: top bar (mode, preset, seed, state, FPS, RUN/PAUSE/RESET/CONTROL DECK), two `Viewport` widgets (Camera FOV with reticle + yellow detection + green/cyan estimate + error vector; World FOV with yellow trail + cyan footprint), `Dashboard` (state, accuracy, timing, lock/acq, IMM probs, PID, conditions), and the two-portion `ControlDeck` dialog (**AI System** and **Deterministic / Classical**). A 30 Hz `QTimer` drives `pipeline_step()` independently.
 
 Colour language (consistent everywhere): green LOCKED, yellow detection, cyan estimate, blue searching, amber warning, red failure, magenta debug GT.
 

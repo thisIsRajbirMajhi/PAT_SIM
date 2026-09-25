@@ -4,7 +4,7 @@ Run a synthetic PAT simulation with configurable scenario and auto-generated per
 
 Usage:
     python scripts/run_simulation.py --trajectory circular --duration 30 --seed 42 --output outputs/runs/manual
-    python scripts/run_simulation.py --config configs/high_noise.yaml
+    python scripts/run_simulation.py --config configs/presets/03_ai_robustness.yaml
 
 This script is headless (no GUI) and is suitable for batch evaluation and CI.
 It uses the same pipeline as the GUI: World -> VirtualCamera -> Detector -> Tracker (EKF-IMM) -> PID -> Metrics -> AutoLogger.

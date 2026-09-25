@@ -11,7 +11,7 @@ from fsoc_tracker.evaluation.report import export_run
 import tempfile, os, json, csv
 
 def test_smoke_p01_60_frames():
-    cfg = load_config("configs/P01_clean_baseline.yaml")
+    cfg = load_config("configs/benchmarks/P01_clean_baseline.yaml")
     src = SyntheticSource(cfg, seed=cfg["experiment"]["seed"])
     det = BeaconDetector(cfg)
     trk = Tracker(cfg)
@@ -40,7 +40,7 @@ def test_smoke_p01_60_frames():
         assert k in s
 
 def test_export_creates_artifacts(tmp_path):
-    cfg = load_config("configs/P01_clean_baseline.yaml")
+    cfg = load_config("configs/benchmarks/P01_clean_baseline.yaml")
     src = SyntheticSource(cfg, seed=42)
     det = BeaconDetector(cfg)
     trk = Tracker(cfg)

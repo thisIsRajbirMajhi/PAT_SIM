@@ -22,18 +22,36 @@ import numpy as np
 from .types import IdentityResult, IdentityState, IdentityEvidence
 from .features import SEQ_LEN, EMBED_DIM
 
-try:
-    import torch  # type: ignore
-    import torch.nn as nn  # type: ignore
-    HAS_TORCH = True
-except Exception:
-    HAS_TORCH = False
+# Optional dependencies are loaded lazily. Importing this module must never
+# import torch/onnxruntime; those runtimes are only loaded when a model file
+# is configured below.
+_TORCH_STATE = {"loaded": False, "ok": False, "torch": None, "nn": None}
+_ONNX_STATE = {"loaded": False, "ok": False, "module": None}
 
-try:
-    import onnxruntime as ort  # type: ignore
-    HAS_ONNX = True
-except Exception:
-    HAS_ONNX = False
+
+def _load_torch():
+    """Import torch on demand; return (torch, nn) or None."""
+    if not _TORCH_STATE["loaded"]:
+        try:
+            import torch  # type: ignore
+            import torch.nn as nn  # type: ignore
+            _TORCH_STATE.update({"loaded": True, "ok": True, "torch": torch, "nn": nn})
+        except Exception:
+            _TORCH_STATE.update({"loaded": True, "ok": False, "torch": None, "nn": None})
+    if _TORCH_STATE["ok"]:
+        return (_TORCH_STATE["torch"], _TORCH_STATE["nn"])
+    return None
+
+
+def _load_onnxruntime():
+    """Import onnxruntime on demand; return the module or None."""
+    if not _ONNX_STATE["loaded"]:
+        try:
+            import onnxruntime as ort  # type: ignore
+            _ONNX_STATE.update({"loaded": True, "ok": True, "module": ort})
+        except Exception:
+            _ONNX_STATE.update({"loaded": True, "ok": False, "module": None})
+    return _ONNX_STATE["module"] if _ONNX_STATE["ok"] else None
 
 
 # -------------------------------------------------------------- fallback voter
@@ -53,10 +71,13 @@ def _heuristic_identity(seq: np.ndarray, mask: np.ndarray, signature_score: floa
 
 
 # -------------------------------------------------------------- torch GRU
-if HAS_TORCH:
+def _build_torch_gru(torch_deps, input_dim: int = EMBED_DIM + 11, hidden: int = 64, num_classes: int = 3):
+    """Construct the Stage-2 torch GRU after torch has been loaded lazily."""
+    _torch, nn = torch_deps
+
     class GRUIdentity(nn.Module):  # type: ignore
         """1-layer GRU for track identity (hidden 64 or 128)."""
-        def __init__(self, input_dim: int = EMBED_DIM + 11, hidden: int = 64, num_classes: int = 3):
+        def __init__(self, input_dim: int = input_dim, hidden: int = hidden, num_classes: int = num_classes):
             super().__init__()
             self.gru = nn.GRU(input_dim, hidden, num_layers=1, batch_first=True)
             self.fc = nn.Linear(hidden, num_classes)
@@ -70,6 +91,8 @@ if HAS_TORCH:
             conf = self.conf_head(h).squeeze(1)
             return logits, conf
 
+    return GRUIdentity(input_dim=input_dim, hidden=hidden, num_classes=num_classes)
+
 
 class IdentityClassifier:
     """
@@ -82,26 +105,38 @@ class IdentityClassifier:
         self.timeout_ms: int = int(ai.get("inference_timeout_ms", 40))
         self.seq_len: int = int(ai.get("sequence_length", SEQ_LEN))
         self.hidden: int = int(ai.get("gru_hidden", 64))
+        self._torch = None
         self._torch_model = None
         self._ort_session = None
 
         if not self.enabled:
             return
-        if self.model_path and self.model_path.endswith(".onnx") and HAS_ONNX:
-            try:
-                self._ort_session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
-            except Exception as e:
-                print(f"[IdentityClassifier] ONNX load failed: {e}")
-        elif self.model_path and self.model_path.endswith((".pt", ".pth")) and HAS_TORCH:
-            try:
-                ckpt = torch.load(self.model_path, map_location="cpu")  # type: ignore
-                m = GRUIdentity(hidden=self.hidden)
-                state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
-                m.load_state_dict(state, strict=False)
-                m.eval()
-                self._torch_model = m
-            except Exception as e:
-                print(f"[IdentityClassifier] Torch load failed: {e}")
+        # Only load an optional runtime when a model file is actually configured.
+        if self.model_path and self.model_path.endswith(".onnx"):
+            ort = _load_onnxruntime()
+            if ort is None:
+                print(f"[IdentityClassifier] ONNX Runtime unavailable ({self.model_path}); using heuristic.")
+            else:
+                try:
+                    self._ort_session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
+                except Exception as e:
+                    print(f"[IdentityClassifier] ONNX load failed: {e}")
+        elif self.model_path and self.model_path.endswith((".pt", ".pth")):
+            torch_deps = _load_torch()
+            if torch_deps is None:
+                print(f"[IdentityClassifier] PyTorch unavailable ({self.model_path}); using heuristic.")
+            else:
+                torch, _nn = torch_deps
+                try:
+                    ckpt = torch.load(self.model_path, map_location="cpu")  # type: ignore
+                    m = _build_torch_gru(torch_deps, hidden=self.hidden)
+                    state = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+                    m.load_state_dict(state, strict=False)
+                    m.eval()
+                    self._torch = torch
+                    self._torch_model = m
+                except Exception as e:
+                    print(f"[IdentityClassifier] Torch load failed: {e}")
 
     def predict_for_track(self, track, signature_score: float = 0.5) -> IdentityResult:
         """
@@ -109,8 +144,7 @@ class IdentityClassifier:
         Falls back to heuristic voter when no trained model is loaded.
         """
         t0 = time.perf_counter()
-        from .features import build_gru_sequence
-        seq, mask = build_gru_sequence(track, seq_len=self.seq_len)
+        seq, mask = self._build_model_input(track)
 
         # try learned model within timeout
         timeout_s = self.timeout_ms / 1000.0
@@ -129,8 +163,8 @@ class IdentityClassifier:
                         probs = _softmax(logits[0])
                         p_primary, p_decoy, p_unknown = float(probs[0]), float(probs[1]), float(probs[2])
                         conf = float(c[0]) if c.size else 0.5
-                    elif self._torch_model is not None and HAS_TORCH:
-                        import torch as _torch  # type: ignore
+                    elif self._torch_model is not None and self._torch is not None:
+                        _torch = self._torch
                         seq_t = _torch.from_numpy(seq).unsqueeze(0)
                         mask_t = _torch.from_numpy(mask).unsqueeze(0)
                         with _torch.no_grad():  # type: ignore
@@ -171,6 +205,62 @@ class IdentityClassifier:
             evidence=evidence,
             model_version=self.model_path or "heuristic",
         )
+
+
+    def _build_model_input(self, track) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Build the (seq_len, input_dim) GRU input matching the trained model.
+
+        Two layouts exist in the codebase:
+         - 139-dim: 128-d CNN embedding + 11 motion/signal features
+           (features.build_gru_sequence; used when a full embedding is stored)
+         - 11-dim: motion/signal features only (training pipeline layout,
+           dataset.SEQ_FEATURE_DIM)
+        The layout is selected by the configured model's expected input width.
+        """
+        from .training.dataset import SEQ_FEATURE_DIM as TRAIN_DIM, build_sequence_from_track
+        expected = self._expected_input_dim()
+        if expected == TRAIN_DIM:
+            # model trained on the 11-dim motion/signal contract
+            td = {
+                "position_history": list(track.position_history),
+                "velocity_history": list(track.velocity_history),
+                "brightness_history": list(track.brightness_history),
+                "size_history": list(track.size_history),
+                "blink_history": list(track.blink_history),
+                "innovation_history": list(track.innovation_history),
+                "imm_probs_history": list(track.imm_probs_history),
+                "track_id": track.track_id,
+            }
+            sample = build_sequence_from_track(td, seq_len=self.seq_len)
+            if sample is not None:
+                # fill neutral IMM evidence the runtime tracker supplies but
+                # the training-free track dict above lacks (defaults 0.33/0.33/
+                # 0.34 in build_sequence_from_track differ from training's
+                # 0.6/0.25/0.15 constant — keep parity with training data)
+                n_valid = int(sample.mask.sum())
+                sample.sequence[25 - n_valid:, 8:11] = (0.6, 0.25, 0.15)
+            if sample is None:
+                return np.zeros((self.seq_len, TRAIN_DIM), dtype=np.float32), np.zeros((self.seq_len,), dtype=np.float32)
+            return sample.sequence, sample.mask
+        # default 139-dim layout (CNN embedding + motion/signal)
+        from .features import build_gru_sequence
+        seq, mask = build_gru_sequence(track, seq_len=self.seq_len)
+        feat_dim = seq.shape[1]
+        if expected > 0 and feat_dim != expected:
+            out = np.zeros((seq.shape[0], expected), dtype=np.float32)
+            w = min(feat_dim, expected)
+            out[:, :w] = seq[:, :w]
+            return out, mask
+        return seq, mask
+
+    def _expected_input_dim(self) -> int:
+        """Query the loaded model for its expected input feature width."""
+        if self._ort_session is not None:
+            return int(self._ort_session.get_inputs()[0].shape[-1] or 0)
+        if self._torch_model is not None:
+            return int(self._torch_model.gru.input_size)
+        return -1
 
 
 def _softmax(x: np.ndarray) -> np.ndarray:

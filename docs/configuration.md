@@ -1,6 +1,6 @@
 # Configuration Guide — FSOC Virtual Camera Tracking PAT Simulator
 
-> All tunable parameters live in `configs/*.yaml` and `src/fsoc_tracker/config/defaults.py`. They are validated by `config/schema.py` and editable at runtime via the Control Deck drawer.
+> All tunable parameters live in `configs/` and `src/fsoc_tracker/config/defaults.py`. They are validated by `config/schema.py` and editable at runtime via the Control Deck drawer. The GUI reads curated files from `configs/presets/`; detailed regression scenarios live separately in `configs/benchmarks/`.
 
 ---
 
@@ -8,21 +8,20 @@
 
 | File | Purpose |
 |------|---------|
-| `configs/default.yaml` | Canonical defaults (clean baseline). Copy as template. |
-| `configs/high_noise.yaml` | Overlay example — only overrides changed keys. |
+| `configs/presets/*.yaml` | Four curated Control Deck presets; each declares `preset_meta.system` (`ai` or `deterministic`) and `preset_meta.ai_mode` (`ON` or `OFF`). |
+| `configs/benchmarks/P*.yaml` | Detailed P01–P12 benchmark/regression scenarios; not shown in the GUI selector. |
 | `src/fsoc_tracker/config/defaults.py` | `DEFAULT_CONFIG` dict — single source of truth for defaults, limits and types. |
 | `src/fsoc_tracker/config/schema.py` | `validate_config()` — asserts spec ranges, fails fast. |
 | `src/fsoc_tracker/config/loader.py` | Loads YAML, deep-merges with `DEFAULT_CONFIG`. |
+| `src/fsoc_tracker/config/presets.py` | Discovers curated GUI presets independently of other YAML files. |
 
-**Overlay pattern:** any YAML may contain only the keys to override; missing keys fall back to `DEFAULT_CONFIG`. Example `high_noise.yaml`:
+**Overlay pattern:** any YAML may contain only the keys to override; missing keys fall back to `DEFAULT_CONFIG`. Curated presets include explicit metadata so the Control Deck can explain their AI mode and purpose. For example, `configs/presets/03_ai_robustness.yaml` uses:
 
 ```yaml
-# configs/high_noise.yaml
-camera: {jitter_px: 8}
-noise: {gaussian_enabled: true, gaussian_std: 14, salt_pepper_enabled: true, salt_pepper_prob: 0.04, poisson: true}
-atmosphere: {type: haze, strength: 0.35}
-platform: {type: linear, speed_px_per_frame: 4.0}
-target: {trajectory: random, speed_px_per_frame: 4.5}
+ai: {enabled: true}
+camera: {jitter_px: 2.0}
+noise: {gaussian_enabled: true, gaussian_std: 5.0, salt_pepper_enabled: true, salt_pepper_prob: 0.01, poisson: true}
+atmosphere: {type: haze, strength: 0.15}
 ```
 
 ---
@@ -207,7 +206,7 @@ State machine additionally uses `required_lock=5`, `required_candidate=3` (hardc
 ## 8. Complete Example Configuration
 
 ```yaml
-# configs/default.yaml — clean baseline (all sections explicit)
+# Resolved baseline (conceptual example; DEFAULT_CONFIG is the source of truth)
 world: {width: 2000, height: 2000, background: 18}
 camera: {type: monochrome, resolution: [640,480], fov_deg: [4.0,3.0], fps: 30.0,
          initial_position: centre, initial_pan: 0.0, initial_tilt: 0.0,
@@ -227,16 +226,7 @@ controller: {kp_pan: 1.2, kp_tilt: 1.2, ki: 0.05, kd: 0.15, deadzone_px: 2.0, in
 experiment: {duration_s: 30, seed: 42, input_mode: SYNTHETIC, video_path: ""}
 ```
 
-**High-noise benchmark:**
-
-```yaml
-# configs/high_noise.yaml — overlay
-camera: {jitter_px: 8}
-noise: {gaussian_enabled: true, gaussian_std: 14, salt_pepper_enabled: true, salt_pepper_prob: 0.04, poisson: true}
-atmosphere: {type: haze, strength: 0.35}
-platform: {type: linear, speed_px_per_frame: 4.0}
-target: {trajectory: random, speed_px_per_frame: 4.5}
-```
+**AI robustness preset:** `configs/presets/03_ai_robustness.yaml` keeps the identity signature and decoy profiles together with moderate disturbances. The older P01–P12 variants remain under `configs/benchmarks/` for controlled detector/tracker regression; they are not GUI presets.
 
 **Custom trajectory and shape:**
 
@@ -265,19 +255,18 @@ assert 0 <= jitter_px <= 20
 assert 0 <= platform.speed <= 20
 ```
 
-Preset loader merges `default.yaml <- selected overlay <- Control Deck edits`, validates, then calls `World.update_config`, `VirtualCamera.update_config`, `BeaconDetector.update_config`, `Tracker.update_config`, `CameraController.update_config` without restart.
+Preset loading merges `DEFAULT_CONFIG <- configs/presets/<selected>.yaml <- active-portion Control Deck edits`, validates, and then refreshes the active source, detector, tracker, and controller. Loading a preset switches to that preset’s owning portion. Applying the dialog sends only the active portion and synchronizes the runtime-mode indicator before resetting the run.
 
 ---
 
 ## 10. Recommended Performance Presets
 
-| Preset | Scenario | Key Overrides | Expected Outcome |
-|--------|----------|---------------|-----------------|
-| Clean Baseline | Straight, no disturbance | defaults | Acq < 1 s, RMSE 2-4 px, loss 0 % |
-| High Noise | Random + combined noise + jitter | `high_noise.yaml` + speed 4.5 | RMSE < 9 px, loss < 4 % demonstrates robustness |
-| Platform Jitter | Circular + circular platform 12 px/f | `platform.type=circular, speed=12` | Tests IMM MN switching |
-| Low Light-Fog | Sinusoidal + fog 0.5 | `atmosphere fog 0.5` + stars | Threshold + scoring stress test |
-| Video Benchmark | External `.mp4` 30 fps | `input_mode=VIDEO` | PTZ bypass, same detector/metrics pipeline |
+| Preset | AI mode | Scenario | Expected outcome |
+|--------|---------|----------|------------------|
+| **AI — Primary + Decoys** | ON | One coded primary plus two decoys | Primary confirmation after five consistent observations; decoys remain out of PID control |
+| **Classical — Clean Baseline** | OFF | Straight single target, clear conditions | Classical detector → EKF-IMM → PID baseline |
+| **AI — Robustness** | ON | Primary plus decoys with moderate noise, haze, jitter, and platform motion | No false primary lock under the configured disturbance envelope |
+| **Video — Benchmark** | OFF | External `.mp4` at 30 fps | PTZ bypass, detector/metrics/report path |
 
 ---
 
@@ -289,13 +278,16 @@ Every run saves `outputs/runs/<timestamp>_<trajectory>_seedN/config_used.yaml` �
 
 ## 12. Quick Reference — Control Deck Mapping
 
-| Deck Tab | Parameters Exposed |
+Each portion below stages the same shared groups independently; the AI portion also stages the AI-only groups.
+
+| Deck Group | Parameters Exposed |
 |----------|-------------------|
-| Presets & Run | preset loader, `seed`, `duration_s`, save/restore defaults |
+| Presets & Run | portion-owned preset loader, portion-owned `seed`, portion-owned `duration_s`, save/reset active portion |
 | Target | `count`, `shape`, `size`, `initial_pos/mode`, `trajectory`, `speed`, `angle`, `radius`, `intensity`, `custom_trajectory_file`, `custom_polygon` |
 | Camera | `resolution`, `fov_deg`, `fps`, `initial_position/pan/tilt`, `max_pan/tilt_speed`, `jitter_px` |
 | Estimator & Controller | `detector.threshold_k/min_area/max_area/blur_ksize`, `tracker.process_noise/meas_noise/gate_sigma/lost/reacq`, `controller.kp/ki/kd/deadzone/integral_limit/feedforward` |
 | Environment | `world.*`, `environment.*`, `platform.type/speed` |
 | Disturbances | `noise.*`, `atmosphere.*`, `camera.jitter_px` |
 | Input/Logging | `experiment.input_mode/video_path`, FPS display, overlay toggles, `Debug GT` |
+| AI / Identity (AI portion only) | `ai.*`, `primary_target.*`, `decoys.*`, AI search ranking, model paths |
 

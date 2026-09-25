@@ -48,7 +48,7 @@ python scripts/run_parameter_sweep.py
 - **Camera:** Monochrome/Colour, 640×480 (320-1920), FOV 4×3° (1-12°), FPS 30-60 (min 30), Pan/Tilt 5-10°/s, Initial position centre/user-defined with preview, Update ≥20 Hz
 - **Detector:** Adaptive `bg + k·σ` (k=3) + p98, morphology, intensity-weighted centroid `ΣI·x/ΣI`
 - **Tracker:** Hybrid EKF-IMM-PID (CV/CA/MN, 6-state, tan projection, NIS gating, 7-state machine)
-- **GUI:** Light theme, Camera FOV (reticle, bbox, centroid, est trail, vel arrow), World FOV (cyan footprint, beacon trail, scale bar), Live Dashboard (58 own fields, 8 cards), Control Deck (7 tabs), Benchmark Results modal, Auto-logs
+- **GUI:** Light theme, Camera FOV (reticle, bbox, centroid, est trail, vel arrow), World FOV (cyan footprint, beacon trail, scale bar), Live Dashboard (58 own fields, 8 cards), two-portion Control Deck (AI + deterministic), Benchmark Results modal, Auto-logs
 
 ## Folder Structure (per Implementation Plan §31)
 
@@ -65,7 +65,7 @@ fsoc-virtual-tracker/
 │   ├── evaluation/          # metrics, report, auto_logger
 │   ├── ui/                  # app, viewport, dashboard, control_deck, theme
 │   └── infrastructure/      # logging, profiling
-├── configs/                 # default.yaml, high_noise.yaml
+├── configs/                 # presets/ (GUI), benchmarks/ (P01-P12), AI/training config
 ├── tests/                   # unit, integration, scenarios, fixtures
 ├── scripts/                 # run_simulation, run_video_benchmark, run_parameter_sweep
 ├── models/                  # optional AI models (README)

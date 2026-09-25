@@ -79,7 +79,7 @@ def test_preset_seed_fixed_per_plan():
     import glob, os
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     for pid, expected_seed in [("P01_clean_baseline",42),("P05_gaussian_noise",46),("P12_external_mp4_benchmark",53)]:
-        path = os.path.join(root, "configs", f"{pid}.yaml")
+        path = os.path.join(root, "configs", "benchmarks", f"{pid}.yaml")
         cfg = load_config(path)
         assert cfg["experiment"]["seed"] == expected_seed
 

@@ -28,7 +28,7 @@ from fsoc_tracker.evaluation.metrics import MetricsCollector
 from fsoc_tracker.common.enums import TrackingState
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-CONFIGS_DIR = os.path.join(ROOT, "configs")
+BENCHMARKS_DIR = os.path.join(ROOT, "configs", "benchmarks")
 
 # ---------- helpers ----------
 
@@ -64,11 +64,11 @@ def run_headless(cfg, frames=120, seed=None):
 def get_preset_path(pid):
     """pid like P01_clean_baseline or p01."""
     pid_low = pid.lower()
-    for p in sorted(glob.glob(os.path.join(CONFIGS_DIR, "*.yaml"))):
+    for p in sorted(glob.glob(os.path.join(BENCHMARKS_DIR, "P*.yaml"))):
         base = os.path.splitext(os.path.basename(p))[0].lower()
         if base == pid_low or base.startswith(pid_low):
             return p
-    raise FileNotFoundError(f"Preset {pid} not found in {CONFIGS_DIR}")
+    raise FileNotFoundError(f"Benchmark scenario {pid} not found in {BENCHMARKS_DIR}")
 
 def assert_summary_keys(summary):
     required = ["total_frames","duration_s","input_fps","avg_fps","e2e_fps","dropped_frames",

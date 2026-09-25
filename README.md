@@ -16,10 +16,18 @@ python src/fsoc_tracker/main.py
 - **World FOV**: full 2000×2000 world, beacon + decoy trails, cyan camera footprint & boresight
 - **Target Tracks**: live table ID/Class/Primary%/Signature/State/Age/Missed + evidence checklist
 - **Dashboard**: state, accuracy (RMSE/mean/max/P95), timing, lock/acq, IMM probs, PID, conditions
-- **Control Deck** (drawer): Presets, Target, Camera, Estimator/Controller, Environment, Disturbances, AI/Identity, Search, Detection, Input/Logging
+- **Control Deck** (drawer): two independent portions — **AI System** and **Deterministic / Classical** — each with its own staged presets, Target, Camera, Estimator/Controller, Environment, Disturbances, Search, Detection, and Input/Logging settings. AI-only identity/decoy controls live only in the AI portion.
 
 ## Presets
-Clean Baseline / High Noise / Platform Jitter / Low Light-Fog / Multi-Target / Stars Vignetting / Custom
+
+The Control Deck exposes four curated, user-facing presets, split by owning portion:
+
+- **AI — Primary + Decoys** (AI portion, AI ON): one coded primary plus two decoys; demonstrates multi-candidate identity confirmation and decoy rejection.
+- **Classical — Clean Baseline** (deterministic portion, AI OFF): the original single-target detector → EKF-IMM → PID path with no AI controls active.
+- **AI — Robustness** (AI portion, AI ON): the same identity workflow with moderate noise, haze, jitter, platform motion, and faster decoys.
+- **Video — Benchmark** (deterministic portion, AI OFF): external MP4 input with virtual PTZ bypass; switch to the AI portion when testing coded video.
+
+The detailed P01–P12 scenarios remain available as benchmark-only files in `configs/benchmarks/` for deterministic regression tests. They are intentionally not clutter in the GUI selector. Use **Save As** to add a custom preset under `configs/presets/`.
 
 ## Thresholds (per spec)
 Acquisition ≤2s, Re-acquisition ≤1s, RMSE ≤10px, Loss <5%, FPS ≥20
@@ -55,6 +63,8 @@ python scripts/export_models.py --format onnx
 Data split seeds `1-70/71-85/86-100` no leakage. Hard negatives form substantial val/test. See `docs/training_pipeline.md`.
 
 ## Config
+- `configs/presets/`: four curated GUI presets; each file declares its owning portion in `preset_meta.system` (`ai` or `deterministic`) and its AI mode in `preset_meta.ai_mode`.
+- `configs/benchmarks/`: benchmark-only P01–P12 regression scenarios (not shown in the Control Deck).
 - `configs/ai.yaml`: `enabled`, `patch_size 64`, `sequence_length 25`, `thresholds`, `signatures`, `model_paths`, `inference_timeout_ms`
 - `configs/training.yaml`: data roots, split, candidate/identity hyperparams, export opset
 - `configs/identity_signatures.yaml`: primary/decoy blink/freq profiles

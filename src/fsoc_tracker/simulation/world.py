@@ -19,6 +19,8 @@ class World:
         self.traj = make_trajectory(cfg, seed=seed)
         self.trajectories.append(self.traj)
         # Additional targets use independent random trajectories with offset seeds
+        decoys_cfg = cfg.get("decoys", {}) if isinstance(cfg.get("decoys"), dict) else {}
+        decoy_positions = decoys_cfg.get("initial_positions", [])
         for i in range(1, self.target_count):
             # Create a variant config for distractor targets: random trajectory
             distractor_cfg = cfg.copy()
@@ -26,6 +28,13 @@ class World:
             distractor_cfg["target"] = cfg["target"].copy()
             distractor_cfg["target"]["trajectory"] = "random"
             distractor_cfg["target"]["speed_px_per_frame"] = float(cfg["target"].get("speed_px_per_frame", 2.8)) * (0.7 + 0.6 * ((i % 3) / 2))
+            # Keep the primary and decoys spatially separated when explicit
+            # decoy start positions are provided by a curated preset.
+            position_index = i - 1
+            if position_index < len(decoy_positions):
+                position = decoy_positions[position_index]
+                if isinstance(position, (list, tuple)) and len(position) == 2:
+                    distractor_cfg["target"]["initial_pos"] = list(position)
             self.trajectories.append(make_trajectory(distractor_cfg, seed=seed + i * 1009))
         self.target_size = int(cfg["target"]["size"])
         self.target_intensity = int(cfg["target"].get("intensity", 255))
@@ -35,25 +44,37 @@ class World:
         self.all_world_pos = [traj.step(0) for traj in self.trajectories]
         self.world_pos = self.all_world_pos[0] if self.all_world_pos else self.traj.step(0)
         # optical signature blink patterns per target (Plan §8)
-        # Preserve constant bright beacon when AI disabled and no decoys (backward compat for classical presets)
-        ai_enabled = bool(cfg.get("ai", {}).get("enabled", False))
-        prim_sig = cfg.get("primary_target", {}).get("optical_signature", {}) if isinstance(cfg.get("primary_target"), dict) else {}
-        sig_enabled = bool(prim_sig.get("enabled", ai_enabled))
-        if not sig_enabled and int(cfg["target"].get("count", 1)) == 1:
-            # classical single-target without signature: always on
-            self._blink_patterns = ["1"]
-        else:
-            self._blink_patterns = [str(prim_sig.get("blink_pattern", cfg.get("ai", {}).get("signatures", {}).get("blink_pattern", "10110010")))]
-            # decoys: alternate pattern or from decoys.profiles
-            decoys = cfg.get("decoys", {})
-            if isinstance(decoys, dict) and decoys.get("profiles"):
-                for prof in decoys["profiles"]:
-                    pat = prof.get("blink_pattern") or "11100011"
-                    self._blink_patterns.append(str(pat))
-            # fill remaining slots with rotating decoy patterns
-            while len(self._blink_patterns) < self.target_count:
-                decoy_opts = ["11100011", "10101010", "11001100", "00011100"]
-                self._blink_patterns.append(decoy_opts[(len(self._blink_patterns) - 1) % len(decoy_opts)])
+        self._blink_patterns = self._build_blink_patterns(cfg)
+
+    def _build_blink_patterns(self, cfg):
+        """Return one deterministic optical pattern for each rendered target.
+
+        In classical mode all rendered targets stay continuously bright: coded
+        blinking is an identity signal and should not alter the original
+        detector/tracker regression path when AI is disabled. In AI mode the
+        primary uses the configured code and decoys use their explicit or
+        deterministic alternate codes.
+        """
+        count = int(cfg.get("target", {}).get("count", 1))
+        if not bool(cfg.get("ai", {}).get("enabled", False)):
+            return ["1"] * count
+
+        primary = cfg.get("primary_target", {})
+        prim_sig = primary.get("optical_signature", {}) if isinstance(primary, dict) else {}
+        ai_signatures = cfg.get("ai", {}).get("signatures", {}) if isinstance(cfg.get("ai"), dict) else {}
+        default_pattern = ai_signatures.get("blink_pattern", "10110010") if isinstance(ai_signatures, dict) else "10110010"
+        patterns = [str(prim_sig.get("blink_pattern", default_pattern))]
+
+        decoys = cfg.get("decoys", {}) if isinstance(cfg.get("decoys"), dict) else {}
+        for profile in decoys.get("profiles", []) if isinstance(decoys.get("profiles", []), list) else []:
+            if isinstance(profile, dict):
+                patterns.append(str(profile.get("blink_pattern") or "11100011"))
+            else:
+                patterns.append("11100011")
+        decoy_options = ["11100011", "10101010", "11001100", "00011100"]
+        while len(patterns) < count:
+            patterns.append(decoy_options[(len(patterns) - 1) % len(decoy_options)])
+        return patterns[:count]
 
     # ---------- base building ----------
     def _build_base(self, cfg, seed):
@@ -234,11 +255,18 @@ class World:
             self.trajectories = []
             self.traj = make_trajectory(cfg, seed=self.seed)
             self.trajectories.append(self.traj)
+            decoys_cfg = cfg.get("decoys", {}) if isinstance(cfg.get("decoys"), dict) else {}
+            decoy_positions = decoys_cfg.get("initial_positions", [])
             for i in range(1, self.target_count):
                 distractor_cfg = cfg.copy()
                 distractor_cfg["target"] = cfg["target"].copy()
                 distractor_cfg["target"]["trajectory"] = "random"
                 distractor_cfg["target"]["speed_px_per_frame"] = float(cfg["target"].get("speed_px_per_frame", 2.8)) * (0.7 + 0.6 * ((i % 3) / 2))
+                position_index = i - 1
+                if position_index < len(decoy_positions):
+                    position = decoy_positions[position_index]
+                    if isinstance(position, (list, tuple)) and len(position) == 2:
+                        distractor_cfg["target"]["initial_pos"] = list(position)
                 self.trajectories.append(make_trajectory(distractor_cfg, seed=self.seed + i * 1009))
             self.all_world_pos = [traj.step(self.frame_id) for traj in self.trajectories]
         # update target size/intensity/shape live + blink patterns
@@ -246,23 +274,7 @@ class World:
         self.target_intensity = int(cfg["target"].get("intensity", 255))
         self.target_shape = cfg["target"].get("shape", "square")
         self.custom_polygon = cfg["target"].get("custom_polygon", None)
-        # refresh blink patterns if count changed
-        ai_enabled = bool(cfg.get("ai", {}).get("enabled", False))
-        prim_sig = cfg.get("primary_target", {}).get("optical_signature", {}) if isinstance(cfg.get("primary_target"), dict) else {}
-        sig_enabled = bool(prim_sig.get("enabled", ai_enabled))
-        if not sig_enabled and int(cfg.get("target", {}).get("count", 1)) == 1:
-            self._blink_patterns = ["1"]
-        else:
-            self._blink_patterns = [str(prim_sig.get("blink_pattern", cfg.get("ai", {}).get("signatures", {}).get("blink_pattern", "10110010")))]
-            decoys = cfg.get("decoys", {})
-            if isinstance(decoys, dict) and decoys.get("profiles"):
-                for prof in decoys["profiles"]:
-                    pat = prof.get("blink_pattern") or "11100011"
-                    if len(self._blink_patterns) < cfg.get("target", {}).get("count", 1):
-                        self._blink_patterns.append(str(pat))
-            while len(self._blink_patterns) < int(cfg.get("target", {}).get("count", 1)):
-                decoy_opts = ["11100011", "10101010", "11001100", "00011100"]
-                self._blink_patterns.append(decoy_opts[(len(self._blink_patterns) - 1) % len(decoy_opts)])
+        self._blink_patterns = self._build_blink_patterns(cfg)
 
     def step(self):
         # Update all targets independently (Sr.8 multi-target)

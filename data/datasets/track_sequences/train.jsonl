@@ -5,7 +5,7 @@
 {"seed": 4, "split": "train", "track_id": 2, "label": "DECOY", "seq_len": 25, "valid_len": 17, "file": "seed4_track002_DECOY.npz", "hard_type": "fog"}
 {"seed": 8, "split": "train", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed8_track001_PRIMARY.npz", "hard_type": "jitter"}
 {"seed": 9, "split": "train", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed9_track001_PRIMARY.npz", "hard_type": "none"}
-{"seed": 10, "split": "train", "track_id": 1, "label": "UNKNOWN", "seq_len": 25, "valid_len": 25, "file": "seed10_track001_UNKNOWN.npz", "hard_type": "bright_decoy"}
+{"seed": 10, "split": "train", "track_id": 1, "label": "DECOY", "seq_len": 25, "valid_len": 25, "file": "seed10_track001_DECOY.npz", "hard_type": "bright_decoy"}
 {"seed": 10, "split": "train", "track_id": 2, "label": "DECOY", "seq_len": 25, "valid_len": 20, "file": "seed10_track002_DECOY.npz", "hard_type": "bright_decoy"}
 {"seed": 11, "split": "train", "track_id": 1, "label": "DECOY", "seq_len": 25, "valid_len": 25, "file": "seed11_track001_DECOY.npz", "hard_type": "centre_decoy"}
 {"seed": 12, "split": "train", "track_id": 1, "label": "PRIMARY", "seq_len": 25, "valid_len": 25, "file": "seed12_track001_PRIMARY.npz", "hard_type": "fog"}

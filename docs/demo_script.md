@@ -10,9 +10,9 @@
 | Phase | Wall Time | What to Show | Proves |
 |-------|-----------|-------------|--------|
 | 1. Problem in one sentence | 0:00-0:15 | FSOC beam is narrow; coarse PAT must find-centre-follow a beacon under disturbance | Understanding |
-| 2. Clean baseline lock | 0:15-0:55 | SYNTHETIC straight/circular, acq < 2 s, visible overlays | Mandatory baseline |
+| 2. Classical baseline lock | 0:15-0:55 | SYNTHETIC **Classical — Clean Baseline** (AI OFF), acq < 2 s | Mandatory baseline |
 | 3. Live metrics explain | 0:55-1:20 | Dashboard: RMSE, reacq, lock %, IMM probs, FPS pass/fail | Measurability |
-| 4. High-noise robustness | 1:20-2:10 | Switch to High Noise preset (jitter 8, Gaussian 14, S&P 0.04 + haze + random) — lock retained, RMSE < 10 | Robustness |
+| 4. AI identity robustness | 1:20-2:10 | Switch to **AI — Robustness** (primary + decoys, moderate noise/haze/jitter/platform) — decoys rejected, primary drives PID | AI safety + robustness |
 | 5. Forced loss & reacq | 2:10-2:50 | Trigger loss (pause/random or occlude), show spiral search, re-lock <= 1 s timer | Re-acquisition spec |
 | 6. Benchmark video (MP4) | 2:50-3:30 | Load `.mp4` @30fps, show same pipeline without PTZ | Benchmark Performance-2 |
 | 7. Export report | 3:30-3:55 | EXPORT REPORT -> open `summary_report.html` and `config_used.yaml` | Automatic logging |
@@ -27,13 +27,13 @@ If time is 3 min, compress 3 and 8; if 5 min, linger in phases 4-6.
 
 - [ ] Machine at 640x480, 30 Hz, connected to a projector that shows both Camera FOV and World FOV.
 - [ ] `python -m fsoc_tracker.main` launches without error; top bar shows `SYNTHETIC | Seed 42 | IDLE | FPS --`.
-- [ ] `configs/default.yaml` and `configs/high_noise.yaml` present.
+- [ ] Curated GUI presets are present in `configs/presets/`; the benchmark suite remains in `configs/benchmarks/`.
 - [ ] A sample benchmark video at `data/sample.mp4` (or any H.264 30 fps clip) copied locally — path without spaces.
 - [ ] A previous `outputs/runs/` example kept aside to show report layout if export runs long.
 - [ ] Audio of system level muted (no surprise notifications).
 - [ ] Projector resolution allows at least 1280x800 so both viewports are sharp; if using `launch.py`, no firewall prompt.
 
-Rehearse the exact slider values: Clean `circular r=180 speed 2.8`; High Noise `random 4.5 + gaussian 14 + S&P 0.04 + jitter 8 + haze 0.35 + platform linear 4`. Transitions should be Apply -> RUN without typing.
+Rehearse the exact preset transitions: deterministic-portion **Classical — Clean Baseline** (AI OFF) → AI-portion **AI — Robustness** (AI ON) → deterministic-portion **Video — Benchmark**. Select **Load Preset**, then **Apply Active Portion**, and confirm the runtime-mode indicator changes before running.
 
 ---
 
@@ -47,14 +47,14 @@ Rehearse the exact slider values: Clean `circular r=180 speed 2.8`; High Noise `
 
 **Show:** Title bar `FSOC Virtual Camera Tracking PAT Simulator v1.0.0` with `SYNTHETIC` badge — gesture at top bar.
 
-### Phase 2 — Clean Baseline Lock (0:15-0:55) — 40 s
+### Phase 2 — Classical — Clean Baseline (0:15-0:55) — 40 s
 
 **Objective:** Acquire and track visibly within spec on the simplest scenario.
 
 **Operator actions:**
 
 1. Point at Camera FOV and World FOV labels so the judge registers what each screen means.
-2. Click **CONTROL DECK** -> Presets tab -> select **Clean Baseline** -> **Apply**. Seed shows `42`.
+2. Click **CONTROL DECK** → **Deterministic / Classical** portion → select **Classical — Clean Baseline** → **Load Preset** → **Apply Active Portion**. Confirm the top bar shows AI OFF; seed is `42`.
 3. Confirm Target tab reads `circular, r=180, speed 2.8` and Camera tab `640x480 | FOV 4 deg x 3 deg | 30 fps`; close drawer (or leave open — judge should see it).
 4. Click **RUN**.
 
@@ -70,7 +70,7 @@ Rehearse the exact slider values: Clean `circular r=180 speed 2.8`; High Noise `
 
 ### Phase 3 — Live Metrics Explain (0:55-1:20) — 25 s
 
-Leave Clean Baseline running. Gesture across Dashboard cards left-to-right.
+Leave the classical baseline running. Gesture across Dashboard cards left-to-right.
 
 **Say:**
 
@@ -78,13 +78,13 @@ Leave Clean Baseline running. Gesture across Dashboard cards left-to-right.
 
 **Point at:** `RMSE 3.1 / 10 px` and `FPS 29 / 20` turning green; IMM bars stable.
 
-### Phase 4 — High Noise Robustness (1:20-2:10) — 50 s
+### Phase 4 — AI Robustness (1:20-2:10) — 50 s
 
 **Objective:** Show lock is retained under the combined benchmark disturbances — the key differentiator.
 
 **Operator actions:**
 
-1. Leave the clean run visible for 2 s, then click **CONTROL DECK** -> rename to **High Noise** (or load `configs/high_noise.yaml` preset) -> point at the slider summary: `Gaussian 14, S&P 0.04, Poisson on, jitter 8, haze 0.35, random 4.5, linear platform 4` -> **Apply**.
+1. Leave the classical run visible for 2 s, then click **CONTROL DECK** → **AI System** portion → select **AI — Robustness** → **Load Preset** → **Apply Active Portion**. Confirm AI ON in the top bar and that the identity card/target tracks become visible.
 2. The frame visibly degrades (grain + haze veil). Click **RESET** so the new random trajectory starts under the new noise with seed 42 (or seed 43 to show a variant).
 3. Click **RUN** again.
 
@@ -106,7 +106,7 @@ If time permits, momentarily drag `jitter_px` from 8 to 16 live to show degradat
 
 **Operator actions:**
 
-1. While High Noise is locked, trigger a loss. Two reliable options:
+1. While the AI robustness run is locked, trigger a loss. Two reliable options:
    - **Option A (recommended):** Click **PAUSE** for 1 s, change Target tab to `random` (if not already) or `circular` with speed `10`, click **Apply** -> **RUN** — queue a sudden direction/speed change the tracker hasn't converged on; or
    - **Option B:** Speed up `speed_px_per_frame` to `10` at `jitter 12` for 2 s, then revert — the beacon will exit the FOV briefly and the World FOV will show the footprint lagging.
 2. Watch state go `LOCKED -> TEMP_LOST -> REACQUIRING` (amber/blue) and hear no beep — the camera footprint spirals (dashed cyan spiral on World FOV).
@@ -178,7 +178,7 @@ Have ready the whiteboard diagram: `Frame -> Detector -> IMM-EKF -> StateMachine
 
 **Say:**
 
-> "Clean baseline proved the loop locks. High noise proved it stays locked within the 10 px / 5 % envelope under the benchmark's combined disturbances — with live IMM adaptivity as the explanation. Loss proved the state machine and spiral search recover inside a second. Video proved the same pipeline handles the external 30 fps case without code forking. Logs proved everything is automatic and replayable. Next is hardware-in-the-loop — real pan-tilt encoders and a camera feeding the existing `FrameSource` and `CameraController` contracts — because the software interfaces already exist."
+> "The classical baseline proved the original loop locks. The AI robustness preset proved the same loop can identify the coded primary while rejecting decoys under moderate disturbances. Loss proved the state machine and spiral search recover inside a second. Video proved the same pipeline handles the external 30 fps case without code forking. Logs proved everything is automatic and replayable. Next is hardware-in-the-loop — real pan-tilt encoders and a camera feeding the existing `FrameSource` and `CameraController` contracts — because the software interfaces already exist."
 
 Thank the audience. Leave the exported `summary_report.html` and `config_used.yaml` on screen.
 
@@ -215,7 +215,7 @@ Thank the audience. Leave the exported `summary_report.html` and `config_used.ya
 - [ ] The running application (or installed exe) in the demo window.
 - [ ] The exported `outputs/runs/<timestamp>_<traj>_seedN/` folder with `config_used.yaml`, `summary_report.html` and `frame_metrics.csv` on screen.
 - [ ] `docs/` folder (architecture, algorithms, configuration, testing, technical_report, user_manual, this script).
-- [ ] `configs/default.yaml` and `configs/high_noise.yaml` showing the two presets used.
+- [ ] The four curated files under `configs/presets/` are available, and the P01–P12 suite is under `configs/benchmarks/`.
 - [ ] Optional 3-5 min screen recording of the same flow (as `data/demo_recording.mp4`, not in git if large).
 
 ---

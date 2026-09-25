@@ -786,7 +786,7 @@ class MainWindow(QMainWindow):
     def show_help(self):
         QMessageBox.information(self, "Help",
             "FSOC PAT Simulator  ·  Quick start\n\n"
-            "1. Control Deck → Preset (Clean / High Noise / Fog) → Apply\n"
+            "1. Control Deck → Presets & Run (AI — Primary + Decoys / Classical — Clean Baseline / AI — Robustness / Video — Benchmark) → Load Preset → Apply\n"
             "2. Input: Synthetic (procedural world) or Video (.mp4 @30 fps, PTZ bypassed)\n"
             "3. Run — Camera: reticle=boresight, amber=bbox+centroid, green=diamond=estimate, trail=fade, arrow=velocity\n"
             "   World: amber trail = beacon, blue = camera FOV, + = boresight, scale bar = 400 px\n"

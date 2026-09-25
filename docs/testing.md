@@ -218,7 +218,7 @@ cases = list(itertools.product(
     [0, 8],           # jitter
 ))
 for std, sp, atmo, jit in cases:
-    cfg = load_config("configs/default.yaml")
+    cfg = load_config("configs/presets/02_classical_baseline.yaml")
     cfg["noise"]["gaussian_std"] = std
     cfg["noise"]["salt_pepper_prob"] = sp
     cfg["atmosphere"]["type"] = atmo
@@ -228,11 +228,12 @@ for std, sp, atmo, jit in cases:
     # assert summary["rmse_px"] <= 10 or record degradation curve
 ```
 
-Acceptance per cell: if `rmse>10` or `loss>=5` the cell is flagged; the worst-case curve (not just clean) drives tuning. Worst-case selections are saved in `configs/default.yaml`.
+Acceptance per cell: if `rmse>10` or `loss>=5` the cell is flagged; the worst-case curve (not just clean) drives tuning. Curated operating points live under `configs/presets/`; detailed cells remain in `configs/benchmarks/`.
 
 ### 5.1 Expected Behaviour Under Disturbances
 
-- **Gaussian std 14 + S&P 0.04 + jitter 8 + haze 0.35 + random 4.5** (high_noise) should still pass medium-noise thresholds with RMSE ~6-9 px, demonstrating robustness.
+- **AI — Robustness** (moderate Gaussian/S&P/ Poisson noise, jitter, haze, and platform motion) should exercise the identity safety path without a false primary lock.
+- The detailed P01–P12 disturbance cells remain in `configs/benchmarks/` and are run by the headless regression suite.
 - Beyond max envelope (e.g., `gaussian 20 + fog 0.7 + jitter 20` simultaneously) loss will exceed 5% — correctly exposing the operating boundary.
 - IMM `P_MN` should dominate in random/jitter/platform cells; `P_CV` in straight/clean cells. Dashboard logs verify.
 

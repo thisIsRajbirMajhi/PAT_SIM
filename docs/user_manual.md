@@ -98,7 +98,7 @@ What you should see on launch:
 Start your first experiment in 4 clicks:
 
 1. Click **CONTROL DECK** (top bar, right) to open the drawer.
-2. Select Presets tab -> **Clean Baseline** -> **Apply**.
+2. Select Presets tab → **Classical — Clean Baseline** → **Load Preset** → **Apply**.
 3. Click **RUN** (top bar). The beacon (yellow) should appear and the Camera FOV should show detection (yellow bbox + centroid), estimate (green/cyan dot) and an error vector.
 4. Within < 2 s the Dashboard state should turn `LOCKED` (green) with RMSE < 10 px.
 
@@ -168,7 +168,7 @@ Three interaction principles: **one-click start** (preset -> Apply -> RUN), **sa
 | Element | Description |
 |---------|-------------|
 | Mode badge | `SYNTHETIC` or `MP4`. Colour: blue synthetic, amber video. |
-| Preset label | Current preset name, e.g., `Clean Baseline`. |
+| Preset label | Current preset name, e.g., `Classical — Clean Baseline` or `AI — Primary + Decoys`. |
 | Seed | Active random seed (integer). Controls replay. |
 | App state | `IDLE` / `RUNNING` / `PAUSED` / `ERROR`. |
 | Tracking state | `SEARCHING` / `CANDIDATE` / `ACQUIRING` / `LOCKED` / `TEMP_LOST` / `REACQUIRING` / `FAILED`. Colour-coded (green/blue/amber/red). |
@@ -250,27 +250,30 @@ Thresholds (spec section 9): acquisition <= 2 s, reacq <= 1 s, RMSE <= 10 px, lo
 
 ---
 
-## 10. Control Deck — Drawer with 7 Tabs
+## 10. Control Deck — AI and Deterministic Portions
 
-Click **CONTROL DECK** to open/close the drawer (right side, slides over the view without closing it). Edits are **staged** until **Apply** is clicked; parameters that would invalidate a run become read-only while `RUNNING`.
+Click **CONTROL DECK** to open/close the drawer (right side, slides over the view without closing it). The dialog has two top-level portions: **AI System** and **Deterministic / Classical**. Each portion stages a complete, independent parameter set; switching portions does not overwrite the other portion. Click **Apply Active Portion** to send only the visible portion to the simulator. Parameters that would invalidate a run become read-only while `RUNNING`.
 
 Inline validation: invalid values are highlighted beside the field (range, type) before a run can start, using `config/schema.py`.
 
 Tooltips: hover any technical parameter (e.g., `Kp`) for a plain-language explanation.
 
-### 10.1 Tab 1 — Presets & Run
+### 10.1 Presets & Run in Each Portion
 
-- **Preset selector:** `Clean Baseline` / `High Noise` / `Platform Jitter` / `Low Light-Fog` / `Custom`.
-- **Load Preset** — merges the overlay onto defaults.
-- **Save current configuration** — write to `configs/custom_*.yaml`.
-- **Restore safe defaults** — reset to `configs/default.yaml`.
-- **Random seed** (integer) — controls trajectory, noise, platform, stars. Saved with every run.
-- **Simulation duration** (s) — auto-stop after this duration (1-600 s).
-- Controls: **Apply** / **Cancel** for staged edits.
+- **AI portion selector:** `AI — Primary + Decoys` / `AI — Robustness` / `Custom`.
+- **Deterministic portion selector:** `Classical — Clean Baseline` / `Video — Benchmark` / `Custom`.
+- **Load Preset** — loads the selected curated configuration into the active portion only and stages the AI mode shown in the description.
+- **Save current configuration** — writes the active portion as a custom preset under `configs/presets/`; it is discovered on the next Control Deck open.
+- **Reset Active Portion** — restores the AI portion to the curated AI primary/decoy preset, or the deterministic portion to validated defaults.
+- **Random seed** (integer) — controls trajectory, noise, platform, stars. Saved with every run. Each portion keeps its own seed.
+- **Simulation duration** (s) — auto-stop after this duration (1-600 s). Each portion keeps its own duration.
+- Controls: **Apply Active Portion** / **Cancel** for staged edits.
 
-Summary line before start: e.g., `640x480 | FOV 4 deg x 3 deg | 30 FPS | Gaussian noise | IMM CV/CA/MN | PID enabled`.
+The detailed P01–P12 files in `configs/benchmarks/` are regression scenarios and are intentionally not shown in these selectors. Every curated preset explicitly declares its owning portion and `AI ON`/`AI OFF`; the runtime-mode indicator follows the active portion.
 
-### 10.2 Tab 2 — Target
+Sections 10.2–10.7 describe the parameter groups available independently in each portion. The AI portion additionally contains the AI/Identity, primary-profile, and decoy-profile groups.
+
+### 10.2 Target in Each Portion
 
 | Field | Values | Default |
 |-------|--------|---------|
@@ -332,15 +335,15 @@ Independent toggles and sliders for: salt-and-pepper (`salt_pepper_prob` 0-0.15)
 
 ## 11. Presets
 
-| Preset | Scenario | Key Overrides | Use |
-|--------|----------|---------------|-----|
-| Clean Baseline | Straight, no disturbance | defaults | Acq demo, verify loop |
-| High Noise | Random + combined noise + jitter | `jitter 8, gaussian 14, S&P 0.04, poisson, haze 0.35, random 4.5, linear platform 4` | Robustness proof |
-| Platform Jitter | Circular + circular platform 12 | `platform circular speed 12` | IMM manoeuvre test |
-| Low Light-Fog | Sinusoidal + fog 0.5 | `fog 0.5 + stars` | Threshold stress test |
-| Custom | Any hand-edited config | saved as `configs/custom_*.yaml` | User experiments |
+| Preset | AI mode | Scenario | Use |
+|--------|---------|----------|-----|
+| **AI — Primary + Decoys** | ON | One primary with two coded decoys, clean synthetic scene | Demonstrate candidate association, five-frame confirmation, and decoy rejection |
+| **Classical — Clean Baseline** | OFF | One straight-moving target, no disturbances | Verify the original detector → EKF-IMM → PID path |
+| **AI — Robustness** | ON | Primary plus decoys with moderate noise, haze, jitter, and platform motion | Exercise identity safety under realistic disturbances |
+| **Video — Benchmark** | OFF | External MP4 with PTZ bypass | Verify ingestion, metrics, and reports; turn AI on for coded footage |
+| **Custom** | Current state | User-saved YAML in `configs/presets/` | Reproducible experiments |
 
-Selecting a preset loads it into the staged edits — click **Apply** to commit. Saving a custom preset never overwrites an existing one without confirmation.
+Selecting a preset loads it into the active portion’s staged edits — click **Load Preset**, then **Apply Active Portion**. The runtime-mode indicator follows the active portion; AI-specific fields exist only in the AI portion and are never applied from the deterministic portion. Benchmark-only P01–P12 scenarios remain under `configs/benchmarks/` and are not clutter in these lists.
 
 ---
 
@@ -444,7 +447,20 @@ A metric turning red in the Dashboard indicates a spec violation for that run; t
 
 ## 17. Appendix — Configuration Reference
 
-### Minimal `configs/default.yaml`
+### Curated GUI presets
+
+The four maintained GUI overlays are in `configs/presets/`:
+
+| File | AI mode | Purpose |
+|------|---------|---------|
+| `01_ai_primary_decoys.yaml` | ON | Primary + two decoys, coded identity demonstration |
+| `02_classical_baseline.yaml` | OFF | Clean single-target classical regression |
+| `03_ai_robustness.yaml` | ON | Moderate disturbance and decoy stress test |
+| `04_video_benchmark.yaml` | OFF | External MP4 ingestion benchmark |
+
+The detailed P01–P12 scenarios are benchmark-only files under `configs/benchmarks/`; they are not selectable in the Control Deck.
+
+### Example resolved classical configuration
 
 ```yaml
 world: {width: 2000, height: 2000, background: 18}
@@ -467,15 +483,9 @@ controller: {kp_pan: 1.2, kp_tilt: 1.2, ki: 0.05, kd: 0.15,
 experiment: {duration_s: 30, seed: 42, input_mode: SYNTHETIC, video_path: ""}
 ```
 
-### High-noise overlay (`configs/high_noise.yaml`)
+### AI robustness preset
 
-```yaml
-camera: {jitter_px: 8}
-noise: {gaussian_enabled: true, gaussian_std: 14, salt_pepper_enabled: true, salt_pepper_prob: 0.04, poisson: true}
-atmosphere: {type: haze, strength: 0.35}
-platform: {type: linear, speed_px_per_frame: 4.0}
-target: {trajectory: random, speed_px_per_frame: 4.5}
-```
+`configs/presets/03_ai_robustness.yaml` adds moderate combined disturbances to the coded primary/decoy scenario while keeping the AI safety threshold at five consistent observations.
 
 ### Custom trajectory and shape
 

@@ -1,0 +1,38 @@
+{
+  "model": "GRU-1-layer hidden=64 seq_len=25",
+  "status": "trained",
+  "checkpoint": "models\\identity_classifier\\identity_model.pt",
+  "best_epoch": 14,
+  "epochs_run": 23,
+  "val_metrics": {
+    "primary_precision": 1.0,
+    "primary_recall": 1.0,
+    "primary_f1": 1.0,
+    "decoy_rejection_rate": 1.0,
+    "false_lock_rate": 0.0,
+    "unknown_decision_rate": 0.25,
+    "unknown_precision": 1.0,
+    "accuracy": 1.0,
+    "latency_ms_per_sequence": 0.17887500007418566
+  },
+  "confusion_matrix": [
+    [
+      3,
+      0,
+      0
+    ],
+    [
+      0,
+      3,
+      0
+    ],
+    [
+      0,
+      0,
+      2
+    ]
+  ],
+  "train_samples": 63,
+  "val_samples": 8,
+  "seed": 42
+}

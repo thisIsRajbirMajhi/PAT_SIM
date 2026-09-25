@@ -1,7 +1,70 @@
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget, QLabel, QComboBox, QDoubleSpinBox, QSpinBox,
-                             QSlider, QCheckBox, QPushButton, QFormLayout, QGroupBox, QLineEdit, QFileDialog, QMessageBox)
-from PyQt5.QtCore import Qt, pyqtSignal
-from ..config.loader import load_config
+"""Two-portion Control Deck: AI system and deterministic system.
+
+The dialog no longer mixes AI-only fields with the classical pipeline. Each
+top-level portion owns an independent :class:`SystemControlPanel` and staged
+configuration copy. Applying the dialog sends only the active portion to the
+simulator, while the inactive portion remains staged in the dialog.
+"""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Dict, Optional
+
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+)
+from PyQt5.QtCore import pyqtSignal
+
+from ..config.loader import load_config, save_config
+from ..config.presets import (
+    GUI_PRESET_DIR,
+    PresetInfo,
+    discover_presets,
+    preset_by_id,
+    presets_for_system,
+)
+from .control_panel import SystemControlPanel
+
+
+def _initial_ai_config(cfg: Dict) -> Dict:
+    """Return an independent staged configuration for the AI portion."""
+    if bool(cfg.get("ai", {}).get("enabled", False)):
+        staged = copy.deepcopy(cfg)
+    else:
+        info = preset_by_id("ai_primary_decoys")
+        try:
+            staged = load_config(str(info.path)) if info is not None else load_config()
+        except Exception:
+            staged = copy.deepcopy(cfg)
+    staged.setdefault("ai", {})["enabled"] = True
+    return staged
+
+
+def _initial_deterministic_config(cfg: Dict) -> Dict:
+    """Return an independent staged configuration for the classical portion."""
+    if bool(cfg.get("ai", {}).get("enabled", False)):
+        info = preset_by_id("classical_baseline")
+        try:
+            staged = load_config(str(info.path)) if info is not None else load_config()
+        except Exception:
+            staged = load_config()
+    else:
+        staged = copy.deepcopy(cfg)
+    staged.setdefault("ai", {})["enabled"] = False
+    staged.setdefault("decoys", {})["enabled"] = False
+    return staged
+
 
 class ControlDeck(QDialog):
     configApplied = pyqtSignal(dict)
@@ -9,990 +72,330 @@ class ControlDeck(QDialog):
     def __init__(self, cfg, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Control Deck  —  FSOC Tracker")
-        self.resize(640, 820)
-        self.cfg = cfg
+        self.resize(680, 860)
+        self.cfg = copy.deepcopy(cfg)
         from .theme import STYLESHEET
         self.setStyleSheet(STYLESHEET)
+
+        self._all_presets = discover_presets()
+        self._preset_map = {info.display_name: info for info in self._all_presets}
+        self._ai_presets = presets_for_system("ai")
+        self._deterministic_presets = presets_for_system("deterministic")
+        self._syncing = False
+
+        self._profiles: Dict[str, Dict] = {
+            "ai": _initial_ai_config(self.cfg),
+            "deterministic": _initial_deterministic_config(self.cfg),
+        }
+        self._active_system = (
+            "ai" if bool(self.cfg.get("ai", {}).get("enabled", False)) else "deterministic"
+        )
+
         lay = QVBoxLayout(self)
-        # Global AI master toggle (simple, always visible)
-        ai = self.cfg.get("ai", {})
-        head = QHBoxLayout()
-        head.setContentsMargins(6,6,6,6)
-        ai_lbl = QLabel("AI Mode")
-        ai_lbl.setStyleSheet("font-weight:800; font-size:12px;")
-        self.global_ai_check = QCheckBox("AI ON — primary/decoy identification (MobileNet+GRU, 5-frame confirm)")
-        self.global_ai_check.setChecked(bool(ai.get("enabled", False)))
+        intro = QLabel(
+            "Choose a system portion. Each portion has its own complete parameter set. "
+            "Only the active portion is applied."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#475569; font-size:11px;")
+        lay.addWidget(intro)
+
+        mode_row = QHBoxLayout()
+        mode_label = QLabel("Runtime mode")
+        mode_label.setStyleSheet("font-weight:800; font-size:12px;")
+        self.global_ai_check = QCheckBox("AI system active — primary/decoy identification")
         self.global_ai_check.setStyleSheet("font-weight:700; color:#1e40af;")
         self.global_ai_check.toggled.connect(self._on_global_ai_toggled)
-        head.addWidget(ai_lbl)
-        head.addWidget(self.global_ai_check)
-        head.addStretch()
-        lay.addLayout(head)
-        # hint
-        self.ai_hint = QLabel("AI OFF: classical detector → EKF-IMM → PID only. Tracks table & Identity card hidden. AI ON: shows Search-AI, Detection-AI, Identity thresholds & signatures.")
-        self.ai_hint.setWordWrap(True)
-        self.ai_hint.setStyleSheet("color:#64748b; font-size:10px; background:#f1f5f9; padding:6px; border-radius:6px;")
-        lay.addWidget(self.ai_hint)
+        mode_row.addWidget(mode_label)
+        mode_row.addWidget(self.global_ai_check)
+        mode_row.addStretch()
+        lay.addLayout(mode_row)
 
-        self.tabs = QTabWidget()
-        lay.addWidget(self.tabs)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet(
+            "color:#0f172a; font-size:10px; background:#f1f5f9; padding:6px; border-radius:4px;"
+        )
+        lay.addWidget(self.status_label)
 
-        self.tabs.addTab(self._presets_tab(), "Presets & Run")
-        self.tabs.addTab(self._target_tab(), "Target & Decoys")
-        self.tabs.addTab(self._search_tab(), "Search")
-        self.tabs.addTab(self._detection_tab(), "Detection")
-        self.tabs.addTab(self._ai_tab(), "Identity")
-        self.tabs.addTab(self._camera_tab(), "Camera")
-        self.tabs.addTab(self._estimator_tab(), "Estimator & Controller")
-        self.tabs.addTab(self._env_tab(), "Environment")
-        self.tabs.addTab(self._disturb_tab(), "Disturbances")
-        self.tabs.addTab(self._input_tab(), "Input/Logging")
-
-        btns = QHBoxLayout()
-        self.btn_apply = QPushButton("Apply"); self.btn_apply.setObjectName("Primary")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_reset = QPushButton("Restore Defaults")
-        btns.addWidget(self.btn_reset); btns.addStretch(); btns.addWidget(self.btn_cancel); btns.addWidget(self.btn_apply)
-        lay.addLayout(btns)
-        self.btn_apply.clicked.connect(self._apply)
-        self.btn_cancel.clicked.connect(self.reject)
-        self.btn_reset.clicked.connect(self._restore_defaults)
-        # initial AI visibility sync (defer until widgets exist)
-        self._ai_sync_pending = True
-
-    def showEvent(self, event):
-        # sync AI UI on first show (all tabs/widgets now created)
-        if getattr(self, '_ai_sync_pending', False):
-            self._ai_sync_pending = False
-            self._sync_ai_ui()
-            # wire global ↔ identity checkbox sync
-            try:
-                self.global_ai_check.toggled.connect(self._on_global_ai_toggled)
-                self.ai_enabled_check.toggled.connect(lambda v: self.global_ai_check.setChecked(v) if self.global_ai_check.isChecked()!=v else None)
-            except Exception:
-                pass
-        super().showEvent(event)
-
-    def _on_global_ai_toggled(self, checked):
-        # sync identity tab checkbox and update UI
-        try:
-            if hasattr(self, 'ai_enabled_check') and self.ai_enabled_check.isChecked() != checked:
-                self.ai_enabled_check.setChecked(checked)
-        except Exception:
-            pass
-        self._sync_ai_ui()
-
-    def _sync_ai_ui(self):
-        enabled = self.global_ai_check.isChecked() if hasattr(self, 'global_ai_check') else False
-        # hint
-        try:
-            self.ai_hint.setText("AI ON: Multi-candidate + blink signature + 5-frame confirm → only PRIMARY drives PID. Search/Detection/Identity sections active." if enabled else "AI OFF: Classical single-target detector → EKF-IMM → PID only. Search/Detection AI and Identity thresholds hidden/disabled.")
-            self.ai_hint.setStyleSheet(f"color:{'#065f46' if enabled else '#64748b'}; font-size:10px; background:{'#ecfdf5' if enabled else '#f1f5f9'}; padding:6px; border-radius:6px; border:1px solid {'#a7f3d0' if enabled else '#e2e8f0'};")
-        except Exception:
-            pass
-        # enable/disable AI-related fields
-        for name in ("search_ai_check", "det_conf_spin", "det_model_edit", "primary_thr_spin", "decoy_thr_spin", "confirm_spin", "blink_edit", "freq_spin", "freq_tol_spin", "sig_enabled_check", "candidate_model_edit", "identity_model_edit", "w_app_spin", "w_sig_spin"):
-            w = getattr(self, name, None)
-            if w is not None:
-                w.setEnabled(enabled)
-                w.setToolTip("" if enabled else "Enable AI mode to configure")
-        # dim Search/Detection/Identity tabs when AI OFF (keep them but visually muted)
-        try:
-            for idx in range(self.tabs.count()):
-                text = self.tabs.tabText(idx)
-                if text in ("Search", "Detection", "Identity"):
-                    self.tabs.setTabEnabled(idx, True)  # keep enabled but hint via enabled fields
-                    # optional: add • AI suffix
-                    base = text.split(" •")[0]
-                    self.tabs.setTabText(idx, f"{base} • AI" if enabled else base)
-        except Exception:
-            pass
-
-    def _presets_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        # Discover presets from configs/*.yaml — P01..P12 from Preset Plan.md
-        import os, glob, yaml
-        preset_files = sorted(glob.glob(os.path.join("configs", "*.yaml")))
-        self._preset_map = {}
-        self._preset_meta_map = {}
-        display_names = []
-        for pf in preset_files:
-            base = os.path.splitext(os.path.basename(pf))[0]
-            # Pretty: P01_clean_baseline -> P01 - Clean Baseline
-            if base.startswith("P") and "_" in base:
-                # Split Pxx prefix
-                prefix = base[:3]  # P01
-                rest = base[4:] if len(base) > 4 else base[3:]
-                pretty = f"{prefix} - {rest.replace('_',' ').title()}"
-            else:
-                pretty = base.replace("_", " ").title()
-            self._preset_map[pretty] = pf
-            display_names.append(pretty)
-            # Try to read preset_meta for description
-            try:
-                with open(pf) as fh:
-                    data = yaml.safe_load(fh) or {}
-                self._preset_meta_map[pretty] = data.get("preset_meta", {})
-            except:
-                self._preset_meta_map[pretty] = {}
-        # Ensure built-ins are present even if files missing (legacy)
-        for builtin in ["Clean Baseline","High Noise","Platform Jitter","Low Light / Fog","Stars Vignetting","Multi Target","Benchmark Video"]:
-            if builtin not in display_names:
-                display_names.append(builtin)
-        if "Custom" not in display_names:
-            display_names.append("Custom")
-        self.preset_combo = QComboBox()
-        self.preset_combo.addItems(display_names)
-        # Default to P01 Clean Baseline if available
-        try:
-            for cand in ["P01 - Clean Baseline", "P01 — Clean Baseline", "Clean Baseline"]:
-                if cand in display_names:
-                    self.preset_combo.setCurrentIndex(display_names.index(cand))
-                    break
-        except:
-            pass
-        self.preset_desc = QLabel("Preset loads full Sr.1-15 + disturbances + environment. Click Load then Apply.")
-        self.preset_desc.setWordWrap(True)
-        self.preset_desc.setStyleSheet("color:#64748b; font-size:10px;")
-        self.preset_expected = QLabel("")
-        self.preset_expected.setWordWrap(True)
-        self.preset_expected.setStyleSheet("color:#0f172a; font-size:10px; background:#f1f5f9; padding:4px; border-radius:4px;")
-        self.preset_expected.hide()
-        self.seed_spin = QSpinBox(); self.seed_spin.setRange(0,999999); self.seed_spin.setValue(self.cfg["experiment"]["seed"])
-        self.duration_spin = QDoubleSpinBox(); self.duration_spin.setRange(5,600); self.duration_spin.setValue(self.cfg["experiment"]["duration_s"])
-        self.btn_load_preset = QPushButton("Load Preset")
-        self.btn_save_preset = QPushButton("Save As…")
-        self.btn_save_preset.setToolTip("Save current Control Deck values to a new YAML in configs/")
-        h = QHBoxLayout(); h.addWidget(self.btn_load_preset); h.addWidget(self.btn_save_preset)
-        f.addRow("Preset", self.preset_combo)
-        f.addRow("", self.preset_desc)
-        f.addRow("", self.preset_expected)
-        f.addRow("", h)
-        f.addRow("Random Seed", self.seed_spin)
-        f.addRow("Duration (s)", self.duration_spin)
-        self.preset_info = QLabel("Includes: World, Camera (Type/Res/FOV/FPS/Init/Pan-Tilt), Target (Count/Shape/Size/Init/Motion), Disturbances (Noise/Jitter/Atmosphere/Platform), Environment (Gradient/Stars/Vignetting/Brightness)")
-        self.preset_info.setWordWrap(True)
-        self.preset_info.setStyleSheet("color:#64748b; font-size:9px; font-style:italic;")
-        f.addRow(self.preset_info)
-        # Quick-run row: run order hint
-        self.preset_order = QLabel("Order: P01 baseline first, then P02–P04 motion, P05–P07 detection, P08–P09 disturbances, P10–P11 acquisition, P12 video.")
-        self.preset_order.setWordWrap(True)
-        self.preset_order.setStyleSheet("color:#64748b; font-size:9px;")
-        f.addRow(self.preset_order)
-        self.btn_load_preset.clicked.connect(self._load_preset)
-        self.btn_save_preset.clicked.connect(self._save_preset)
-        self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
-        self._on_preset_selected(self.preset_combo.currentText())
-        return w
-
-    def _on_preset_selected(self, name):
-        import os, yaml
-        pf = self._preset_map.get(name, None)
-        meta = getattr(self, "_preset_meta_map", {}).get(name, {})
-        if pf and os.path.exists(pf):
-            purpose = meta.get("purpose", "")
-            expected = meta.get("expected", {})
-            exp_str = ", ".join([f"{k} {v}" for k,v in expected.items()]) if expected else ""
-            try:
-                self.preset_desc.setText(f"File: {pf}" + (f" — {purpose}" if purpose else " — loads on 'Load Preset'."))
-            except:
-                self.preset_desc.setText(f"File: {pf}")
-            if exp_str:
-                self.preset_expected.setText(f"Expected: {exp_str}")
-                self.preset_expected.show()
-            else:
-                # Try read header comments for purpose if no meta
-                try:
-                    with open(pf) as f:
-                        lines = [next(f) for _ in range(5)]
-                    hdr = " ".join([l.strip("# ").strip() for l in lines if l.startswith("#")])
-                    if hdr and len(hdr) > 10:
-                        self.preset_expected.setText(hdr[:220])
-                        self.preset_expected.show()
-                    else:
-                        self.preset_expected.hide()
-                except:
-                    self.preset_expected.hide()
-        elif name == "Custom":
-            self.preset_desc.setText("Custom: current deck values. Save As to create new preset.")
-            self.preset_expected.hide()
+        self.system_tabs = QTabWidget()
+        self.tabs = self.system_tabs  # Compatibility alias for older integrations/tests.
+        self.ai_panel = SystemControlPanel("ai", self._profiles["ai"], self._ai_presets, self)
+        self.deterministic_panel = SystemControlPanel(
+            "deterministic", self._profiles["deterministic"], self._deterministic_presets, self
+        )
+        self.system_tabs.addTab(self.ai_panel, "AI System")
+        self.system_tabs.addTab(self.deterministic_panel, "Deterministic / Classical")
+        if self._active_system == "ai":
+            self.system_tabs.setCurrentWidget(self.ai_panel)
         else:
-            self.preset_desc.setText(f"Built-in preset: {name} — staged, click Load.")
-            self.preset_expected.hide()
+            self.system_tabs.setCurrentWidget(self.deterministic_panel)
+        lay.addWidget(self.system_tabs, 1)
 
-    def _load_preset(self):
-        name = self.preset_combo.currentText()
-        import os, copy
-        pf = self._preset_map.get(name)
-        try:
-            if pf and os.path.exists(pf):
-                from ..config.loader import load_config
-                new_cfg = load_config(pf)
-                self.cfg = new_cfg
-                self._refresh_all_fields()
-                meta = getattr(self, "_preset_meta_map", {}).get(name, {})
-                exp = meta.get("expected", {})
-                exp_str = ", ".join([f"{k} {v}" for k,v in exp.items()]) if exp else ""
-                msg = f"Loaded {pf}\nAll 7 tabs updated. Click Apply to commit to simulator."
-                if exp_str:
-                    msg += f"\n\nExpected: {exp_str}"
-                # Also show purpose header if available
-                try:
-                    with open(pf) as fh:
-                        first = fh.readline().strip()
-                    if first.startswith("#"):
-                        msg = first.strip("# ").strip() + "\n\n" + msg
-                except:
-                    pass
-                QMessageBox.information(self,"Preset Loaded", msg)
-                return
-            # Fallback built-ins (for backward compat if file missing)
-            if name=="Clean Baseline":
-                self._set_fields(atmo="clear", gauss=0, spp=0, jitter=0, platform="none")
-            elif name=="High Noise":
-                self._set_fields(atmo="clear", gauss=12, spp=0.02, jitter=6, platform="linear")
-            elif name=="Platform Jitter":
-                self._set_fields(atmo="clear", gauss=4, spp=0, jitter=14, platform="linear")
-            elif name=="Low Light / Fog":
-                self._set_fields(atmo="fog", gauss=5, spp=0, jitter=4, platform="none")
-            elif name=="Stars Vignetting":
-                # Toggle stars/vignetting via cfg then refresh
-                self.cfg["environment"]["stars_enabled"] = True
-                self.cfg["environment"]["vignetting_enabled"] = True
-                self.cfg["environment"]["gradient_enabled"] = True
-                self._refresh_all_fields()
-            elif name=="Multi Target":
-                self.cfg["target"]["count"] = 3
-                self._refresh_all_fields()
-            elif name=="Benchmark Video":
-                self.cfg["experiment"]["input_mode"] = "VIDEO"
-                self.cfg["experiment"]["video_path"] = "data/input_videos/test_beacon.mp4"
-                self._refresh_all_fields()
-            QMessageBox.information(self,"Preset","Preset fields staged. Click Apply to commit.")
-        except Exception as e:
-            QMessageBox.warning(self,"Preset Load Failed", str(e))
+        # Compatibility controls retained for existing tests/integrations. They
+        # are hidden because each visible portion now has its own preset
+        # selector; these objects preserve the old unified names/behavior.
+        self.preset_combo = QComboBox(self)
+        self.preset_combo.addItems([info.display_name for info in self._all_presets] + ["Custom"])
+        self.preset_desc = QLabel("", self)
+        self.preset_expected = QLabel("", self)
+        self.preset_combo.hide()
+        self.preset_desc.hide()
+        self.preset_expected.hide()
+        self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
 
-    def _refresh_all_fields(self):
-        """Re-populate every widget from self.cfg (called after loading a preset). Called before Apply so user sees values."""
+        # Compatibility AI name tracks the active portion's runtime mode. The
+        # AI-only panel checkbox remains available as ai_panel.ai_enabled_check.
+        self.ai_enabled_check = self.global_ai_check
+        self.ai_panel.ai_enabled_check.toggled.connect(self._on_ai_panel_toggled)
+        self.ai_panel.presetLoadRequested.connect(lambda info: self._apply_panel_preset("ai", info))
+        self.deterministic_panel.presetLoadRequested.connect(
+            lambda info: self._apply_panel_preset("deterministic", info)
+        )
+        self.ai_panel.presetSaveRequested.connect(self._save_active_preset)
+        self.deterministic_panel.presetSaveRequested.connect(self._save_active_preset)
+        self.system_tabs.currentChanged.connect(self._on_system_changed)
+
+        footer = QHBoxLayout()
+        self.btn_reset = QPushButton("Reset Active Portion")
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_apply = QPushButton("Apply Active Portion")
+        self.btn_apply.setDefault(True)
+        footer.addWidget(self.btn_reset)
+        footer.addStretch()
+        footer.addWidget(self.btn_cancel)
+        footer.addWidget(self.btn_apply)
+        lay.addLayout(footer)
+        self.btn_reset.clicked.connect(self._restore_active_defaults)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_apply.clicked.connect(self._apply)
+
+        # Mark the staged initial presets so both portions display their owner.
+        ai_initial = preset_by_id("ai_primary_decoys")
+        if ai_initial is not None and self.ai_panel.preset_infos.get(ai_initial.display_name):
+            self.ai_panel.set_preset(ai_initial)
+        det_initial_id = self._profiles["deterministic"].get("preset_meta", {}).get("preset")
+        det_initial = preset_by_id(det_initial_id) if det_initial_id else None
+        if det_initial is not None and self.deterministic_panel.preset_infos.get(det_initial.display_name):
+            self.deterministic_panel.set_preset(det_initial)
+        else:
+            self.deterministic_panel.set_preset(None)
+        self._sync_compat_from_active()
+        self._sync_global_from_active()
+
+    # ------------------------------------------------------------------
+    # Active portion helpers
+    # ------------------------------------------------------------------
+    def _active_panel(self) -> SystemControlPanel:
+        return self.ai_panel if self._active_system == "ai" else self.deterministic_panel
+
+    def _panel_for_system(self, system: str) -> SystemControlPanel:
+        return self.ai_panel if system == "ai" else self.deterministic_panel
+
+    def _sync_global_from_active(self) -> None:
+        ai_checked = self.ai_panel.ai_enabled_check.isChecked()
+        self._syncing = True
         try:
-            # Experiment
-            self.seed_spin.setValue(int(self.cfg["experiment"].get("seed",42)))
-            self.duration_spin.setValue(float(self.cfg["experiment"].get("duration_s",30)))
-            # Target
-            self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
-            self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
-            self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square"))
-            self.size_spin.setValue(int(self.cfg["target"].get("size",10)))
-            self.tgt_init_mode_combo.setCurrentText(self.cfg["target"].get("initial_mode","random"))
-            ip = self.cfg["target"].get("initial_pos")
-            if ip and len(ip)==2:
-                self.tgt_init_x_spin.setValue(int(ip[0])); self.tgt_init_y_spin.setValue(int(ip[1]))
-            self.traj_combo.setCurrentText(self.cfg["target"].get("trajectory","circular"))
-            self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file","") or "")
-            # Custom polygon
-            poly = self.cfg["target"].get("custom_polygon")
-            if poly:
-                self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in poly]))
+            self.global_ai_check.setChecked(self._active_system == "ai" and ai_checked)
+        finally:
+            self._syncing = False
+        if self._active_system == "ai":
+            state = "AI ON" if ai_checked else "AI OFF (AI portion staged but disabled)"
+            self.status_label.setText(
+                f"Active portion: AI System · {state}. "
+                "Deterministic parameters are staged separately and untouched."
+            )
+        else:
+            self.status_label.setText(
+                "Active portion: Deterministic / Classical · AI OFF by design. "
+                "AI-only parameters are staged separately and untouched."
+            )
+
+    def _sync_compat_from_active(self, info: Optional[PresetInfo] = None) -> None:
+        panel = self._active_panel()
+        selected = info if info is not None else panel.current_preset()
+        self._syncing = True
+        try:
+            if selected is not None and self.preset_combo.findText(selected.display_name) >= 0:
+                self.preset_combo.setCurrentText(selected.display_name)
             else:
-                self.custom_polygon_edit.clear()
-            self.speed_spin.setValue(float(self.cfg["target"].get("speed_px_per_frame",2.8)))
-            self.angle_spin.setValue(float(self.cfg["target"].get("angle_deg",30)))
-            self.radius_spin.setValue(float(self.cfg["target"].get("radius",180)))
-            # Camera
-            self.cam_type_combo.setCurrentText(self.cfg["camera"].get("type","monochrome"))
-            self.res_w_spin.setValue(int(self.cfg["camera"]["resolution"][0]))
-            self.res_h_spin.setValue(int(self.cfg["camera"]["resolution"][1]))
-            self.fov_h_spin.setValue(float(self.cfg["camera"]["fov_deg"][0]))
-            self.fov_v_spin.setValue(float(self.cfg["camera"]["fov_deg"][1]))
-            self.fps_spin.setValue(int(self.cfg["camera"].get("fps",30)))
-            self.cam_init_combo.setCurrentText(self.cfg["camera"].get("initial_position","centre"))
-            self.cam_init_pan_spin.setValue(float(self.cfg["camera"].get("initial_pan",0)))
-            self.cam_init_tilt_spin.setValue(float(self.cfg["camera"].get("initial_tilt",0)))
-            self.max_pan_spin.setValue(float(self.cfg["camera"].get("max_pan_speed",5)))
-            self.max_tilt_spin.setValue(float(self.cfg["camera"].get("max_tilt_speed",5)))
-            self.update_hz_spin.setValue(int(self.cfg["camera"].get("update_interval_hz",30)))
-            self.jitter_spin.setValue(float(self.cfg["camera"].get("jitter_px",0)))
-            # Environment
-            self.world_w_spin.setValue(int(self.cfg["world"]["width"]))
-            self.world_h_spin.setValue(int(self.cfg["world"]["height"]))
-            self.world_bg_spin.setValue(int(self.cfg["world"].get("background",18)))
-            self.platform_combo.setCurrentText(self.cfg["platform"].get("type","none"))
-            self.platform_speed_spin.setValue(float(self.cfg["platform"].get("speed_px_per_frame",0)))
-            env = self.cfg.get("environment",{})
-            self.grad_enabled.setChecked(bool(env.get("gradient_enabled",False)))
-            self.grad_type_combo.setCurrentText(env.get("gradient_type","linear"))
-            self.grad_top_spin.setValue(int(env.get("gradient_top",22)))
-            self.grad_bottom_spin.setValue(int(env.get("gradient_bottom",38)))
-            self.grad_angle_spin.setValue(int(env.get("gradient_angle",90)))
-            self.stars_enabled.setChecked(bool(env.get("stars_enabled",False)))
-            self.stars_density_spin.setValue(float(env.get("stars_density",0.0007)))
-            self.stars_brightness_spin.setValue(int(env.get("stars_brightness",185)))
-            self.stars_minmag_spin.setValue(int(env.get("stars_min_mag",90)))
-            self.stars_maxmag_spin.setValue(int(env.get("stars_max_mag",255)))
-            self.stars_twinkle_check.setChecked(bool(env.get("stars_twinkle",False)))
-            self.stars_seed_spin.setValue(int(env.get("stars_seed",1337)))
-            self.vig_enabled.setChecked(bool(env.get("vignetting_enabled",False)))
-            self.vig_strength_spin.setValue(float(env.get("vignetting_strength",0.42)))
-            self.vig_radius_spin.setValue(float(env.get("vignetting_radius",0.72)))
-            self.vig_falloff_spin.setValue(float(env.get("vignetting_falloff",2.0)))
-            self.vig_cx_spin.setValue(float(env.get("vignetting_center_x",0.5)))
-            self.vig_cy_spin.setValue(float(env.get("vignetting_center_y",0.5)))
-            self.bright_gain_spin.setValue(float(env.get("brightness_gain",1.0)))
-            self.bright_offset_spin.setValue(int(env.get("brightness_offset",0)))
-            # Disturbances
-            self.atmo_combo.setCurrentText(self.cfg["atmosphere"].get("type","clear"))
-            self.atmo_strength.setValue(float(self.cfg["atmosphere"].get("strength",0)))
-            self.gauss_check.setChecked(bool(self.cfg["noise"].get("gaussian_enabled",False)))
-            self.gauss_spin.setValue(float(self.cfg["noise"].get("gaussian_std",0)))
-            self.spp_check.setChecked(bool(self.cfg["noise"].get("salt_pepper_enabled",False)))
-            self.spp_spin.setValue(float(self.cfg["noise"].get("salt_pepper_prob",0)))
-            self.poisson_check.setChecked(bool(self.cfg["noise"].get("poisson",False)))
-            # Input
-            self.input_combo.setCurrentText(self.cfg["experiment"].get("input_mode","SYNTHETIC"))
-            self.video_path_edit.setText(self.cfg["experiment"].get("video_path",""))
-            self.vid_centre_x_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_x",0)))
-            self.vid_centre_y_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_y",0)))
-            # AI
-            ai = self.cfg.get("ai", {})
-            thr = ai.get("thresholds", {})
-            sig = ai.get("signatures", ai.get("signature", {})) if isinstance(ai, dict) else {}
-            enabled = bool(ai.get("enabled", False))
-            self.ai_enabled_check.setChecked(enabled)
-            try:
-                self.global_ai_check.setChecked(enabled)
-            except Exception:
-                pass
-            self.primary_thr_spin.setValue(float(thr.get("primary_threshold",0.85)))
-            self.decoy_thr_spin.setValue(float(thr.get("decoy_threshold",0.85)))
-            self.confirm_spin.setValue(int(thr.get("confirmation_frames",5)))
-            self.blink_edit.setText(str(sig.get("blink_pattern","10110010")))
-            self.freq_spin.setValue(float(sig.get("modulation_freq_hz",12.0)))
-            self.freq_tol_spin.setValue(float(sig.get("freq_tolerance",0.05)))
-            self.sig_enabled_check.setChecked(bool(sig.get("enabled", True)))
-            self.candidate_model_edit.setText(str(ai.get("candidate_model_path","")))
-            self.identity_model_edit.setText(str(ai.get("identity_model_path","")))
-            try:
-                self._sync_ai_ui()
-            except Exception:
-                pass
-            # Search
-            trk = self.cfg.get("tracker", {})
-            self.search_local_spin.setValue(int(trk.get("lost_timeout_frames",15)//5) if trk.get("lost_timeout_frames",15)>=5 else 3)
-            self.search_spiral_spin.setValue(int(trk.get("reacq_timeout_frames",30)))
-            self.search_roi_spin.setValue(int(self.cfg.get("search",{}).get("roi_size",160)) if self.cfg.get("search") else 160)
-            self.search_ai_check.setChecked(bool(ai.get("search_ranking", False)))
-            # Detection
-            det = self.cfg.get("detector", {})
-            self.det_thr_spin.setValue(float(det.get("threshold_k",3.0)))
-            self.det_min_spin.setValue(int(det.get("min_area",8)))
-            self.det_max_spin.setValue(int(det.get("max_area",900)))
-            self.det_blur_spin.setValue(int(det.get("blur_ksize",3)))
-            self.det_conf_spin.setValue(float(ai.get("detection_threshold",0.45)) if ai else 0.45)
-            self.det_model_edit.setText(str(ai.get("candidate_model_path","")) if ai else "")
-        except Exception as e:
-            print(f"[ControlDeck] _refresh_all_fields failed: {e}")
+                self.preset_combo.setCurrentText("Custom")
+        finally:
+            self._syncing = False
+        self._update_compat_description(selected)
 
-    def _save_preset(self):
-        path,_ = QFileDialog.getSaveFileName(self, "Save Preset YAML", "configs/my_preset.yaml", "YAML (*.yaml *.yml)")
+    def _update_compat_description(self, info: Optional[PresetInfo]) -> None:
+        if info is None:
+            self.preset_desc.setText("Custom: this portion has unsaved independent changes.")
+            self.preset_expected.setText("")
+            return
+        mode = "AI ON" if info.is_ai_preset else "AI OFF"
+        self.preset_desc.setText(f"{mode} · {info.purpose}")
+        if info.expected:
+            self.preset_expected.setText(
+                "Expected: " + ", ".join(f"{key}: {value}" for key, value in info.expected.items())
+            )
+        else:
+            self.preset_expected.setText("")
+
+    # ------------------------------------------------------------------
+    # Events
+    # ------------------------------------------------------------------
+    def _on_system_changed(self, _index: int) -> None:
+        widget = self.system_tabs.currentWidget()
+        self._active_system = "ai" if widget is self.ai_panel else "deterministic"
+        self._sync_compat_from_active()
+        self._sync_global_from_active()
+
+    def _on_ai_panel_toggled(self, _checked: bool) -> None:
+        if self._active_system == "ai":
+            self._sync_global_from_active()
+
+    def _on_global_ai_toggled(self, checked: bool) -> None:
+        if self._syncing:
+            return
+        if checked:
+            self._syncing = True
+            try:
+                self.system_tabs.setCurrentWidget(self.ai_panel)
+            finally:
+                self._syncing = False
+            self._active_system = "ai"
+            self.ai_panel.set_ai_enabled(True)
+        elif self._active_system == "ai":
+            self.ai_panel.set_ai_enabled(False)
+        self._sync_global_from_active()
+
+    # ------------------------------------------------------------------
+    # Presets
+    # ------------------------------------------------------------------
+    def _on_preset_selected(self, name: str) -> None:
+        if self._syncing:
+            return
+        info = self._preset_map.get(name)
+        self._update_compat_description(info)
+        if info is None:
+            return
+        # Loading from the compatibility selector moves to the preset's owner.
+        self._apply_panel_preset("ai" if info.is_ai_preset else "deterministic", info)
+
+    def _load_preset(self) -> None:
+        info = self._preset_map.get(self.preset_combo.currentText())
+        if info is None:
+            return
+        self._apply_panel_preset("ai" if info.is_ai_preset else "deterministic", info)
+
+    def _apply_panel_preset(self, system: str, info: PresetInfo) -> None:
+        if system != self._active_system:
+            self._syncing = True
+            try:
+                self.system_tabs.setCurrentWidget(self._panel_for_system(system))
+            finally:
+                self._syncing = False
+            self._active_system = system
+        panel = self._panel_for_system(system)
+        try:
+            loaded = panel.load_preset(info)
+        except Exception as exc:
+            QMessageBox.warning(self, "Preset failed", f"Could not load {info.display_name}:\n{exc}")
+            return
+        self._profiles[system] = copy.deepcopy(loaded)
+        self.cfg = copy.deepcopy(loaded)
+        self._sync_compat_from_active(info)
+        self._sync_global_from_active()
+
+    def _restore_active_defaults(self) -> None:
+        panel = self._active_panel()
+        try:
+            if self._active_system == "ai":
+                info = preset_by_id("ai_primary_decoys")
+                loaded = panel.load_preset(info) if info else panel.collect_config()
+            else:
+                loaded = load_config()
+                loaded.setdefault("ai", {})["enabled"] = False
+                panel.set_config(loaded)
+                panel.set_preset(None)
+                panel.cfg = copy.deepcopy(loaded)
+        except Exception as exc:
+            QMessageBox.warning(self, "Reset failed", f"Could not reset active portion:\n{exc}")
+            return
+        self._profiles[self._active_system] = copy.deepcopy(loaded)
+        self.cfg = copy.deepcopy(loaded)
+        self._sync_compat_from_active(panel.current_preset())
+        self._sync_global_from_active()
+
+    def _save_active_preset(self) -> None:
+        panel = self._active_panel()
+        try:
+            staged = panel.collect_config()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", f"Cannot save invalid settings:\n{exc}")
+            return
+        default_name = "ai_custom_preset.yaml" if self._active_system == "ai" else "deterministic_custom_preset.yaml"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Save {self._active_system} preset",
+            str(GUI_PRESET_DIR / default_name),
+            "YAML files (*.yaml *.yml)",
+        )
         if not path:
             return
+        file_path = Path(path)
+        stem = file_path.stem.strip().replace(" ", "_").lower() or file_path.stem
+        expected = {
+            "targets": f"{staged['target']['count']} staged",
+            "mode": "AI ON" if self._active_system == "ai" else "AI OFF",
+        }
+        staged["preset_meta"] = {
+            "preset": stem,
+            "display_name": stem.replace("_", " ").strip().title(),
+            "order": 90,
+            "system": self._active_system,
+            "ai_mode": "ON" if self._active_system == "ai" else "OFF",
+            "purpose": f"User-saved {self._active_system} Control Deck preset.",
+            "expected": expected,
+        }
         try:
-            # Build cfg from current UI (without emitting) then save
-            # Temporarily build a copy
-            import copy, yaml, os
-            # Force _apply logic but not emit
-            tmp_cfg = copy.deepcopy(self.cfg)
-            # Re-use _apply code path to fill tmp_cfg from widgets (duplicate logic)
-            # Instead, just save current self.cfg as is (which was last loaded) — user should Apply first for latest UI
-            # So we first sync UI to tmp_cfg
-            self._apply_to_cfg(tmp_cfg)
-            with open(path, "w") as f:
-                yaml.safe_dump(tmp_cfg, f, sort_keys=False)
-            QMessageBox.information(self,"Saved", f"Preset saved to {path}\nIt will appear in the Preset combo on next open.")
-        except Exception as e:
-            QMessageBox.warning(self,"Save Failed", str(e))
+            save_config(staged, str(file_path))
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", f"Could not write preset:\n{exc}")
+            return
+        info = PresetInfo(
+            preset_id=stem,
+            display_name=staged["preset_meta"]["display_name"],
+            path=file_path,
+            ai_mode=staged["preset_meta"]["ai_mode"],
+            purpose=staged["preset_meta"]["purpose"],
+            expected=expected,
+            order=90,
+            system=self._active_system,
+        )
+        self._all_presets.append(info)
+        self._preset_map[info.display_name] = info
+        panel.preset_infos[info.display_name] = info
+        panel.presets.append(info)
+        panel.preset_combo.addItem(info.display_name)
+        panel.set_preset(info)
+        panel.cfg = copy.deepcopy(staged)
+        self._profiles[self._active_system] = copy.deepcopy(staged)
+        self._sync_compat_from_active(info)
+        QMessageBox.information(self, "Preset saved", f"Saved {info.display_name}.")
 
-    def _apply_to_cfg(self, c):
-        # Helper to sync current UI widgets into a cfg dict (used by Save As)
+    # ------------------------------------------------------------------
+    # Apply
+    # ------------------------------------------------------------------
+    def _apply(self) -> None:
+        panel = self._active_panel()
         try:
-            c["target"]["type"] = self.tgt_type_combo.currentText()
-            c["target"]["count"] = int(self.tgt_count_spin.value())
-            c["target"]["shape"] = self.tgt_shape_combo.currentText()
-            c["target"]["size"] = int(self.size_spin.value())
-            mode = self.tgt_init_mode_combo.currentText()
-            c["target"]["initial_mode"] = mode
-            if mode == "random":
-                c["target"]["initial_pos"] = None
-            elif mode == "centre":
-                c["target"]["initial_pos"] = [int(c["world"]["width"]//2), int(c["world"]["height"]//2)]
-            else:
-                c["target"]["initial_pos"] = [int(self.tgt_init_x_spin.value()), int(self.tgt_init_y_spin.value())]
-            c["target"]["trajectory"] = self.traj_combo.currentText()
-            c["target"]["speed_px_per_frame"] = float(self.speed_spin.value())
-            c["target"]["angle_deg"] = float(self.angle_spin.value())
-            c["target"]["radius"] = float(self.radius_spin.value())
-            if c["target"]["shape"] == "user-defined":
-                txt = self.custom_polygon_edit.text().strip()
-                if txt:
-                    pts = []
-                    for part in txt.split(";"):
-                        part=part.strip()
-                        if not part: continue
-                        x_str,y_str = part.split(",")
-                        pts.append([int(float(x_str.strip())), int(float(y_str.strip()))])
-                    c["target"]["custom_polygon"] = pts if len(pts)>=3 else None
-                else:
-                    c["target"]["custom_polygon"] = None
-            else:
-                c["target"]["custom_polygon"] = None
-            if c["target"]["trajectory"] == "user-defined":
-                c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None
-            else:
-                c["target"]["custom_trajectory_file"] = None
-        except Exception:
-            pass
-
-    def _set_fields(self, atmo, gauss, spp, jitter, platform):
-        # update widgets if they exist
-        try:
-            self.atmo_combo.setCurrentText(atmo)
-            self.gauss_spin.setValue(gauss)
-            self.spp_spin.setValue(spp)
-            self.jitter_spin.setValue(jitter)
-            self.platform_combo.setCurrentText(platform)
-        except: pass
-
-    def _target_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        # Target Type
-        self.tgt_type_combo = QComboBox(); self.tgt_type_combo.addItems(["beacon_spot"]); self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
-        # Number of Targets 1 mandatory, 1-5 optional multiple (independent trajectories)
-        self.tgt_count_spin = QSpinBox(); self.tgt_count_spin.setRange(1,5); self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
-        # Shape user-defined default Square + custom polygon support
-        self.tgt_shape_combo = QComboBox(); self.tgt_shape_combo.addItems(["square","circle","gaussian","cross","user-defined"]); self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square"))
-        self.custom_polygon_edit = QLineEdit(); self.custom_polygon_edit.setPlaceholderText("e.g., -5,-5; 5,-5; 5,5; -5,5  or leave empty for 5-point star")
-        # Load existing custom polygon if any
-        existing_poly = self.cfg["target"].get("custom_polygon")
-        if existing_poly and isinstance(existing_poly, list):
-            self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in existing_poly]))
-        self.btn_polygon_file = QPushButton("Load Polygon File…")
-        poly_hbox = QHBoxLayout(); poly_hbox.addWidget(self.custom_polygon_edit); poly_hbox.addWidget(self.btn_polygon_file)
-        # Size 5-20 default 10
-        self.size_spin = QSpinBox(); self.size_spin.setRange(5,20); self.size_spin.setValue(int(self.cfg["target"]["size"]))
-        # Initial Location user-defined default Random
-        self.tgt_init_mode_combo = QComboBox(); self.tgt_init_mode_combo.addItems(["random","centre","user-defined"]); self.tgt_init_mode_combo.setCurrentText(self.cfg["target"].get("initial_mode","random"))
-        init_pos = self.cfg["target"].get("initial_pos")
-        init_x = init_pos[0] if (init_pos and len(init_pos)==2) else 1000
-        init_y = init_pos[1] if (init_pos and len(init_pos)==2) else 1000
-        self.tgt_init_x_spin = QSpinBox(); self.tgt_init_x_spin.setRange(0,4000); self.tgt_init_x_spin.setValue(int(init_x))
-        self.tgt_init_y_spin = QSpinBox(); self.tgt_init_y_spin.setRange(0,4000); self.tgt_init_y_spin.setValue(int(init_y))
-        # Motion at least 4: straight, circular, figure_eight, random + optional spiral, sinusoidal, user-defined (CSV)
-        self.traj_combo = QComboBox(); self.traj_combo.addItems(["straight","circular","figure_eight","random","spiral","sinusoidal","user-defined"])
-        self.traj_combo.setCurrentText(self.cfg["target"]["trajectory"])
-        self.custom_traj_edit = QLineEdit(); self.custom_traj_edit.setPlaceholderText("CSV path: x,y per row  or  t,x,y")
-        self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file", ""))
-        self.btn_traj_file = QPushButton("Browse…")
-        traj_hbox = QHBoxLayout(); traj_hbox.addWidget(self.custom_traj_edit); traj_hbox.addWidget(self.btn_traj_file)
-        self.speed_spin = QDoubleSpinBox(); self.speed_spin.setRange(0,20); self.speed_spin.setSingleStep(0.5); self.speed_spin.setValue(float(self.cfg["target"]["speed_px_per_frame"]))
-        self.angle_spin = QDoubleSpinBox(); self.angle_spin.setRange(0,360); self.angle_spin.setValue(float(self.cfg["target"].get("angle_deg",30)))
-        self.radius_spin = QDoubleSpinBox(); self.radius_spin.setRange(50,800); self.radius_spin.setValue(float(self.cfg["target"].get("radius",400)))
-        f.addRow("Target Type", self.tgt_type_combo)
-        f.addRow("Target Count", self.tgt_count_spin)
-        f.addRow("Target Shape", self.tgt_shape_combo)
-        f.addRow("Custom Polygon", poly_hbox)
-        f.addRow("Target Size", self.size_spin)
-        f.addRow("Initial Position Mode", self.tgt_init_mode_combo)
-        f.addRow("  Init X", self.tgt_init_x_spin); f.addRow("  Init Y", self.tgt_init_y_spin)
-        f.addRow("Motion Trajectory", self.traj_combo)
-        f.addRow("Custom Trajectory CSV", traj_hbox)
-        f.addRow("Speed (px/frame)", self.speed_spin)
-        f.addRow("Angle (straight)", self.angle_spin)
-        f.addRow("Radius (circular/8)", self.radius_spin)
-        # Show/hide custom rows based on selection
-        def _update_target_custom_rows():
-            is_user_shape = self.tgt_shape_combo.currentText() == "user-defined"
-            self.custom_polygon_edit.setVisible(is_user_shape)
-            self.btn_polygon_file.setVisible(is_user_shape)
-            is_user_traj = self.traj_combo.currentText() == "user-defined"
-            self.custom_traj_edit.setVisible(is_user_traj)
-            self.btn_traj_file.setVisible(is_user_traj)
-        self.tgt_shape_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
-        self.traj_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
-        self.btn_polygon_file.clicked.connect(self._browse_polygon)
-        self.btn_traj_file.clicked.connect(self._browse_traj)
-        _update_target_custom_rows()
-        return w
-
-    def _browse_polygon(self):
-        p,_ = QFileDialog.getOpenFileName(self, "Load custom polygon (JSON or CSV: x,y per row)", "", "JSON (*.json);;CSV (*.csv);;All (*.*)")
-        if p:
-            try:
-                import json, csv, os
-                if p.lower().endswith(".json"):
-                    with open(p) as f:
-                        data = json.load(f)
-                        # expect list of [x,y]
-                        if isinstance(data, list) and len(data) > 0:
-                            self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in data]))
-                else:
-                    # CSV: x,y per row
-                    pts = []
-                    with open(p, newline='') as f:
-                        reader = csv.reader(f)
-                        for row in reader:
-                            if not row or row[0].strip().startswith('#'):
-                                continue
-                            vals = [v.strip() for v in row if v.strip()!='']
-                            if len(vals) >= 2:
-                                pts.append(f"{vals[0]},{vals[1]}")
-                    self.custom_polygon_edit.setText("; ".join(pts))
-            except Exception as e:
-                QMessageBox.warning(self, "Polygon load failed", str(e))
-
-    def _browse_traj(self):
-        p,_ = QFileDialog.getOpenFileName(self, "Load custom trajectory CSV (x,y or t,x,y per row)", "", "CSV (*.csv);;All (*.*)")
-        if p:
-            self.custom_traj_edit.setText(p)
-
-    def _camera_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        # Camera Type
-        self.cam_type_combo = QComboBox(); self.cam_type_combo.addItems(["monochrome","colour"]); self.cam_type_combo.setCurrentText(self.cfg["camera"].get("type","monochrome"))
-        # Resolution 640x480 default, 320-1920 user-defined
-        self.res_w_spin = QSpinBox(); self.res_w_spin.setRange(320,1920); self.res_w_spin.setValue(int(self.cfg["camera"]["resolution"][0]))
-        self.res_h_spin = QSpinBox(); self.res_h_spin.setRange(240,1080); self.res_h_spin.setValue(int(self.cfg["camera"]["resolution"][1]))
-        # FOV user-defined default 4x3, range 1-12° — with live preview of footprint
-        self.fov_h_spin = QDoubleSpinBox(); self.fov_h_spin.setRange(1,12); self.fov_h_spin.setValue(float(self.cfg["camera"]["fov_deg"][0]))
-        self.fov_v_spin = QDoubleSpinBox(); self.fov_v_spin.setRange(1,12); self.fov_v_spin.setValue(float(self.cfg["camera"]["fov_deg"][1]))
-        # Camera update Rate 30 Hz min, range 20-60
-        self.fps_spin = QSpinBox(); self.fps_spin.setRange(30,60); self.fps_spin.setValue(int(self.cfg["camera"].get("fps",30)))
-        # Initial Camera Position Centre (default) / user-defined
-        self.cam_init_combo = QComboBox(); self.cam_init_combo.addItems(["centre","user-defined"]); self.cam_init_combo.setCurrentText(self.cfg["camera"].get("initial_position","centre"))
-        self.cam_init_pan_spin = QDoubleSpinBox(); self.cam_init_pan_spin.setRange(-10,10); self.cam_init_pan_spin.setValue(float(self.cfg["camera"].get("initial_pan",0.0)))
-        self.cam_init_tilt_spin = QDoubleSpinBox(); self.cam_init_tilt_spin.setRange(-10,10); self.cam_init_tilt_spin.setValue(float(self.cfg["camera"].get("initial_tilt",0.0)))
-        # /14 Max Pan/Tilt 5-10 °/s default 5
-        self.max_pan_spin = QDoubleSpinBox(); self.max_pan_spin.setRange(5,10); self.max_pan_spin.setSingleStep(0.5); self.max_pan_spin.setValue(float(self.cfg["camera"]["max_pan_speed"]))
-        self.max_tilt_spin = QDoubleSpinBox(); self.max_tilt_spin.setRange(5,10); self.max_tilt_spin.setSingleStep(0.5); self.max_tilt_spin.setValue(float(self.cfg["camera"]["max_tilt_speed"]))
-        # Update Interval ≥20 Hz
-        self.update_hz_spin = QSpinBox(); self.update_hz_spin.setRange(20,60); self.update_hz_spin.setValue(int(self.cfg["camera"].get("update_interval_hz", self.cfg["camera"].get("fps",30))))
-        self.jitter_spin = QDoubleSpinBox(); self.jitter_spin.setRange(0,20); self.jitter_spin.setValue(float(self.cfg["camera"]["jitter_px"]))
-        f.addRow("Camera Type", self.cam_type_combo)
-        f.addRow("Resolution Width", self.res_w_spin); f.addRow("Resolution Height", self.res_h_spin)
-        f.addRow("Horizontal FOV", self.fov_h_spin); f.addRow("Vertical FOV", self.fov_v_spin)
-        f.addRow("Frame Rate", self.fps_spin); f.addRow("Update Rate", self.update_hz_spin)
-        f.addRow("Initial Camera Position", self.cam_init_combo); f.addRow("Initial Pan Angle", self.cam_init_pan_spin); f.addRow("Initial Tilt Angle", self.cam_init_tilt_spin)
-        f.addRow("Maximum Pan Speed", self.max_pan_spin); f.addRow("Maximum Tilt Speed", self.max_tilt_spin)
-        f.addRow("Jitter ±20 px/frame", self.jitter_spin)
-        return w
-
-    def _estimator_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        self.kp_pan_spin = QDoubleSpinBox(); self.kp_pan_spin.setRange(0,5); self.kp_pan_spin.setSingleStep(0.1); self.kp_pan_spin.setValue(float(self.cfg["controller"]["kp_pan"]))
-        self.kp_tilt_spin = QDoubleSpinBox(); self.kp_tilt_spin.setRange(0,5); self.kp_tilt_spin.setSingleStep(0.1); self.kp_tilt_spin.setValue(float(self.cfg["controller"]["kp_tilt"]))
-        self.ki_spin = QDoubleSpinBox(); self.ki_spin.setRange(0,1); self.ki_spin.setSingleStep(0.01); self.ki_spin.setValue(float(self.cfg["controller"]["ki"]))
-        self.kd_spin = QDoubleSpinBox(); self.kd_spin.setRange(0,1); self.kd_spin.setSingleStep(0.02); self.kd_spin.setValue(float(self.cfg["controller"]["kd"]))
-        self.dead_spin = QDoubleSpinBox(); self.dead_spin.setRange(0,10); self.dead_spin.setValue(float(self.cfg["controller"]["deadzone_px"]))
-        self.proc_spin = QDoubleSpinBox(); self.proc_spin.setRange(0.1,5); self.proc_spin.setValue(float(self.cfg["tracker"]["process_noise"]))
-        self.meas_spin = QDoubleSpinBox(); self.meas_spin.setRange(0.5,10); self.meas_spin.setValue(float(self.cfg["tracker"]["meas_noise"]))
-        f.addRow("Kp pan", self.kp_pan_spin); f.addRow("Kp tilt", self.kp_tilt_spin)
-        f.addRow("Ki", self.ki_spin); f.addRow("Kd", self.kd_spin)
-        f.addRow("Deadzone px", self.dead_spin)
-        f.addRow("Process noise", self.proc_spin); f.addRow("Meas noise", self.meas_spin)
-        return w
-
-    def _env_tab(self):
-        # Scrollable Environment tab with Gradient / Stars / Vignetting / Brightness
-        from PyQt5.QtWidgets import QScrollArea, QGroupBox
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        outer = QWidget(); outer_lay = QVBoxLayout(outer); outer_lay.setContentsMargins(6,6,6,6); outer_lay.setSpacing(10)
-        env = self.cfg.get("environment", {})
-
-        # --- World & Platform ---
-        grp_world = QGroupBox("World & Platform")
-        f = QFormLayout(grp_world)
-        self.world_w_spin = QSpinBox(); self.world_w_spin.setRange(2000,4000); self.world_w_spin.setValue(int(self.cfg["world"]["width"]))
-        self.world_h_spin = QSpinBox(); self.world_h_spin.setRange(2000,4000); self.world_h_spin.setValue(int(self.cfg["world"]["height"]))
-        self.world_bg_spin = QSpinBox(); self.world_bg_spin.setRange(0,60); self.world_bg_spin.setValue(int(self.cfg["world"].get("background",18)))
-        self.platform_combo = QComboBox(); self.platform_combo.addItems(["none","linear","circular","random","spiral","figure_of_8"])
-        self.platform_combo.setCurrentText(self.cfg["platform"]["type"])
-        self.platform_speed_spin = QDoubleSpinBox(); self.platform_speed_spin.setRange(0,20); self.platform_speed_spin.setSingleStep(0.5); self.platform_speed_spin.setValue(float(self.cfg["platform"]["speed_px_per_frame"]))
-        f.addRow("World Width", self.world_w_spin); f.addRow("World Height", self.world_h_spin); f.addRow("Background Intensity", self.world_bg_spin)
-        f.addRow("Platform Type", self.platform_combo); f.addRow("Platform Speed", self.platform_speed_spin)
-        outer_lay.addWidget(grp_world)
-
-        # --- Gradient ---
-        grp_grad = QGroupBox("Background Gradient")
-        grp_grad.setCheckable(True)
-        grp_grad.setChecked(bool(env.get("gradient_enabled", False)))
-        self.grad_enabled = grp_grad
-        fg = QFormLayout(grp_grad)
-        self.grad_type_combo = QComboBox(); self.grad_type_combo.addItems(["linear","radial","diagonal"])
-        self.grad_type_combo.setCurrentText(env.get("gradient_type","linear"))
-        self.grad_top_spin = QSpinBox(); self.grad_top_spin.setRange(0,80); self.grad_top_spin.setValue(int(env.get("gradient_top",22)))
-        self.grad_bottom_spin = QSpinBox(); self.grad_bottom_spin.setRange(0,80); self.grad_bottom_spin.setValue(int(env.get("gradient_bottom",38)))
-        self.grad_angle_spin = QSpinBox(); self.grad_angle_spin.setRange(0,360); self.grad_angle_spin.setValue(int(env.get("gradient_angle",90)))
-        fg.addRow("Type", self.grad_type_combo); fg.addRow("Top intensity", self.grad_top_spin); fg.addRow("Bottom intensity", self.grad_bottom_spin); fg.addRow("Angle °", self.grad_angle_spin)
-        outer_lay.addWidget(grp_grad)
-
-        # --- Stars ---
-        grp_stars = QGroupBox("Stars Clutter")
-        grp_stars.setCheckable(True)
-        grp_stars.setChecked(bool(env.get("stars_enabled", False)))
-        self.stars_enabled = grp_stars
-        fs = QFormLayout(grp_stars)
-        self.stars_density_spin = QDoubleSpinBox(); self.stars_density_spin.setRange(0.0,0.006); self.stars_density_spin.setSingleStep(0.0001); self.stars_density_spin.setDecimals(4); self.stars_density_spin.setValue(float(env.get("stars_density",0.0007)))
-        self.stars_brightness_spin = QSpinBox(); self.stars_brightness_spin.setRange(60,255); self.stars_brightness_spin.setValue(int(env.get("stars_brightness",185)))
-        self.stars_minmag_spin = QSpinBox(); self.stars_minmag_spin.setRange(40,200); self.stars_minmag_spin.setValue(int(env.get("stars_min_mag",90)))
-        self.stars_maxmag_spin = QSpinBox(); self.stars_maxmag_spin.setRange(100,255); self.stars_maxmag_spin.setValue(int(env.get("stars_max_mag",255)))
-        self.stars_twinkle_check = QCheckBox("Twinkle (per-frame ±6)")
-        self.stars_twinkle_check.setChecked(bool(env.get("stars_twinkle", False)))
-        self.stars_seed_spin = QSpinBox(); self.stars_seed_spin.setRange(0,999999); self.stars_seed_spin.setValue(int(env.get("stars_seed",1337)))
-        fs.addRow("Density (stars/px)", self.stars_density_spin); fs.addRow("Overall brightness", self.stars_brightness_spin)
-        fs.addRow("Min mag", self.stars_minmag_spin); fs.addRow("Max mag", self.stars_maxmag_spin)
-        fs.addRow(self.stars_twinkle_check); fs.addRow("Stars seed", self.stars_seed_spin)
-        outer_lay.addWidget(grp_stars)
-
-        # --- Vignetting ---
-        grp_vig = QGroupBox("Vignetting (lens falloff)")
-        grp_vig.setCheckable(True)
-        grp_vig.setChecked(bool(env.get("vignetting_enabled", False)))
-        self.vig_enabled = grp_vig
-        fv = QFormLayout(grp_vig)
-        self.vig_strength_spin = QDoubleSpinBox(); self.vig_strength_spin.setRange(0.0,0.95); self.vig_strength_spin.setSingleStep(0.05); self.vig_strength_spin.setValue(float(env.get("vignetting_strength",0.42)))
-        self.vig_radius_spin = QDoubleSpinBox(); self.vig_radius_spin.setRange(0.05,1.0); self.vig_radius_spin.setSingleStep(0.05); self.vig_radius_spin.setValue(float(env.get("vignetting_radius",0.72)))
-        self.vig_falloff_spin = QDoubleSpinBox(); self.vig_falloff_spin.setRange(0.3,6.0); self.vig_falloff_spin.setSingleStep(0.2); self.vig_falloff_spin.setValue(float(env.get("vignetting_falloff",2.0)))
-        self.vig_cx_spin = QDoubleSpinBox(); self.vig_cx_spin.setRange(0.0,1.0); self.vig_cx_spin.setSingleStep(0.05); self.vig_cx_spin.setValue(float(env.get("vignetting_center_x",0.5)))
-        self.vig_cy_spin = QDoubleSpinBox(); self.vig_cy_spin.setRange(0.0,1.0); self.vig_cy_spin.setSingleStep(0.05); self.vig_cy_spin.setValue(float(env.get("vignetting_center_y",0.5)))
-        fv.addRow("Strength", self.vig_strength_spin); fv.addRow("Radius", self.vig_radius_spin); fv.addRow("Falloff", self.vig_falloff_spin)
-        fv.addRow("Center X", self.vig_cx_spin); fv.addRow("Center Y", self.vig_cy_spin)
-        outer_lay.addWidget(grp_vig)
-
-        # --- Brightness ---
-        grp_bright = QGroupBox("Global Brightness")
-        fb = QFormLayout(grp_bright)
-        self.bright_gain_spin = QDoubleSpinBox(); self.bright_gain_spin.setRange(0.5,1.8); self.bright_gain_spin.setSingleStep(0.05); self.bright_gain_spin.setValue(float(env.get("brightness_gain",1.0)))
-        self.bright_offset_spin = QSpinBox(); self.bright_offset_spin.setRange(-40,40); self.bright_offset_spin.setValue(int(env.get("brightness_offset",0)))
-        fb.addRow("Gain (×)", self.bright_gain_spin); fb.addRow("Offset (+)", self.bright_offset_spin)
-        outer_lay.addWidget(grp_bright)
-
-        outer_lay.addStretch()
-        scroll.setWidget(outer)
-        return scroll
-
-    def _disturb_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        # Image Noise: 1.Salt&Pepper (~10% =0.10), 2.Gaussian, 3.Poisson — selectable one or more
-        self.atmo_combo = QComboBox(); self.atmo_combo.addItems(["clear","haze","fog","rain","low_light"])
-        self.atmo_combo.setCurrentText(self.cfg["atmosphere"]["type"])
-        self.atmo_strength = QDoubleSpinBox(); self.atmo_strength.setRange(0,1); self.atmo_strength.setSingleStep(0.1); self.atmo_strength.setValue(float(self.cfg["atmosphere"]["strength"]))
-        # Max Standard Deviation 20 pixels (Gaussian σ)
-        self.gauss_spin = QDoubleSpinBox(); self.gauss_spin.setRange(0,20); self.gauss_spin.setSingleStep(1); self.gauss_spin.setValue(float(self.cfg["noise"].get("gaussian_std",0)))
-        self.gauss_check = QCheckBox("Enable Gaussian (σ)"); self.gauss_check.setChecked(bool(self.cfg["noise"].get("gaussian_enabled", False)))
-        # S&P ~10% of image → 0.10, range 0-0.15
-        self.spp_spin = QDoubleSpinBox(); self.spp_spin.setRange(0,0.15); self.spp_spin.setSingleStep(0.01); self.spp_spin.setValue(float(self.cfg["noise"].get("salt_pepper_prob",0)))
-        self.spp_check = QCheckBox("Enable Salt & Pepper (~10%)"); self.spp_check.setChecked(bool(self.cfg["noise"].get("salt_pepper_enabled", False)))
-        self.poisson_check = QCheckBox("Enable Poisson (3rd)"); self.poisson_check.setChecked(bool(self.cfg["noise"].get("poisson", False)))
-        # Max Camera Jitter ±20 is in Camera tab (jitter_px 0-20), reference here
-        # Atmospheric already above, Platform in Environment tab (linear default, optional circular/random/spiral/figure_of_8, ±20)
-        f.addRow("Image Noise", QLabel("Salt & Pepper, Gaussian, Poisson"))
-        f.addRow(self.gauss_check, self.gauss_spin)
-        f.addRow("Gaussian Std Deviation", QLabel("Max 20 px"))
-        f.addRow(self.spp_check, self.spp_spin)
-        f.addRow(self.poisson_check)
-        f.addRow("Atmospheric Condition", self.atmo_combo); f.addRow("Atmospheric Strength", self.atmo_strength)
-        f.addRow(QLabel("Max Jitter ±20 px/frame → Camera tab")); f.addRow(QLabel("Platform ±20 px/f → Environment tab (Linear def, +Circular/Random/Spiral/Figure-8)"))
-        return w
-
-    def _search_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        trk = self.cfg.get("tracker", {})
-        ai = self.cfg.get("ai", {})
-        self.search_local_spin = QSpinBox(); self.search_local_spin.setRange(1,10); self.search_local_spin.setValue(int(trk.get("lost_timeout_frames",15)//5) if trk.get("lost_timeout_frames",15)>=5 else 3)
-        self.search_spiral_spin = QSpinBox(); self.search_spiral_spin.setRange(10,60); self.search_spiral_spin.setValue(int(trk.get("reacq_timeout_frames",30)))
-        self.search_roi_spin = QSpinBox(); self.search_roi_spin.setRange(80,400); self.search_roi_spin.setValue(int(self.cfg.get("search",{}).get("roi_size",160)) if self.cfg.get("search") else 160)
-        self.search_ai_check = QCheckBox("AI region ranking (predicted pos/velocity, decoy memory, disturbances)")
-        self.search_ai_check.setChecked(bool(ai.get("search_ranking", False)))
-        f.addRow(QLabel("Stage A — Local recovery: search around EKF prediction + velocity (short loss)"))
-        f.addRow("Local timeout (frames)", self.search_local_spin)
-        f.addRow(QLabel("Stage B — Expanding spiral, Stage C — Global raster (long loss)"))
-        f.addRow("Re-acq timeout (frames)", self.search_spiral_spin)
-        f.addRow("ROI size (px)", self.search_roi_spin)
-        f.addRow(self.search_ai_check)
-        f.addRow(QLabel("Deterministic spiral/raster is baseline; AI ranking prioritizes predicted pos/velocity, decoy memory, disturbances (Plan §4). Must respect speed/FOV/timeouts."))
-        # warning if exceeds reacq limit
-        self.search_warning = QLabel("⚠ Re-acq >30 frames may exceed 1 s limit at 30 Hz")
-        self.search_warning.setStyleSheet("color:#B45309; font-size:10px;")
-        self.search_warning.hide()
-        f.addRow(self.search_warning)
-        def _check_reacq():
-            self.search_warning.setVisible(int(self.search_spiral_spin.value()) > 30)
-        self.search_spiral_spin.valueChanged.connect(lambda _: _check_reacq())
-        _check_reacq()
-        return w
-
-    def _detection_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        det = self.cfg.get("detector", {})
-        ai = self.cfg.get("ai", {})
-        self.det_thr_spin = QDoubleSpinBox(); self.det_thr_spin.setRange(1.5,5.0); self.det_thr_spin.setSingleStep(0.5); self.det_thr_spin.setValue(float(det.get("threshold_k",3.0)))
-        self.det_min_spin = QSpinBox(); self.det_min_spin.setRange(2,50); self.det_min_spin.setValue(int(det.get("min_area",8)))
-        self.det_max_spin = QSpinBox(); self.det_max_spin.setRange(100,2000); self.det_max_spin.setValue(int(det.get("max_area",900)))
-        self.det_blur_spin = QSpinBox(); self.det_blur_spin.setRange(1,7); self.det_blur_spin.setValue(int(det.get("blur_ksize",3)))
-        self.det_conf_spin = QDoubleSpinBox(); self.det_conf_spin.setRange(0.3,0.95); self.det_conf_spin.setSingleStep(0.05); self.det_conf_spin.setValue(float(ai.get("detection_threshold",0.45)) if ai else 0.45)
-        f.addRow("Threshold k (bg + k*σ)", self.det_thr_spin)
-        f.addRow("Min blob area", self.det_min_spin)
-        f.addRow("Max blob area", self.det_max_spin)
-        f.addRow("Blur ksize", self.det_blur_spin)
-        f.addRow("AI detection thresh", self.det_conf_spin)
-        f.addRow(QLabel("Adaptive threshold → morphology → CC → Candidate (centroid/bbox/area/aspect/brightness/contrast/compactness/dist). AI MobileNet classifies patch 64×64 + 9 numeric feats → BEACON/DECOY/NOISE/UNKNOWN (Plan §5)."))
-        self.det_model_edit = QLineEdit(str(ai.get("candidate_model_path","")) if ai else "")
-        self.det_model_edit.setPlaceholderText("models/candidate_classifier/best.onnx (empty=heuristic)")
-        f.addRow("AI detector model", self.det_model_edit)
-        return w
-
-    def _ai_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        ai = self.cfg.get("ai", {})
-        thr = ai.get("thresholds", {})
-        sig = ai.get("signatures", ai.get("signature", {})) if isinstance(ai, dict) else {}
-        self.ai_enabled_check = QCheckBox("Enable AI (MobileNet + GRU + Identity)")
-        self.ai_enabled_check.setChecked(bool(ai.get("enabled", False)))
-        self.ai_enabled_check.setStyleSheet("font-weight:700;")
-        f.addRow(self.ai_enabled_check)
-        f.addRow(QLabel("When OFF, system runs classical detector → EKF-IMM → PID only."))
-
-        # Thresholds
-        self.primary_thr_spin = QDoubleSpinBox(); self.primary_thr_spin.setRange(0.5,0.99); self.primary_thr_spin.setSingleStep(0.05); self.primary_thr_spin.setValue(float(thr.get("primary_threshold",0.85)))
-        self.decoy_thr_spin = QDoubleSpinBox(); self.decoy_thr_spin.setRange(0.5,0.99); self.decoy_thr_spin.setSingleStep(0.05); self.decoy_thr_spin.setValue(float(thr.get("decoy_threshold",0.85)))
-        self.confirm_spin = QSpinBox(); self.confirm_spin.setRange(1,15); self.confirm_spin.setValue(int(thr.get("confirmation_frames",5)))
-        f.addRow("Primary threshold", self.primary_thr_spin)
-        f.addRow("Decoy threshold", self.decoy_thr_spin)
-        f.addRow("Confirmation frames", self.confirm_spin)
-        f.addRow(QLabel("Need N consecutive frames above threshold before PRIMARY/DECOY_CONFIRMED (Plan §6). Higher reduces false locks but increases acquisition."))
-
-        # Signatures
-        self.blink_edit = QLineEdit(str(sig.get("blink_pattern", "10110010")))
-        self.blink_edit.setPlaceholderText("10110010")
-        self.freq_spin = QDoubleSpinBox(); self.freq_spin.setRange(1,30); self.freq_spin.setSingleStep(1); self.freq_spin.setValue(float(sig.get("modulation_freq_hz",12.0)))
-        self.freq_tol_spin = QDoubleSpinBox(); self.freq_tol_spin.setRange(0.01,0.20); self.freq_tol_spin.setSingleStep(0.01); self.freq_tol_spin.setValue(float(sig.get("freq_tolerance",0.05)))
-        self.sig_enabled_check = QCheckBox("Signatures enabled")
-        self.sig_enabled_check.setChecked(bool(sig.get("enabled", True)))
-        f.addRow("Blink pattern", self.blink_edit)
-        f.addRow("Modulation freq (Hz)", self.freq_spin)
-        f.addRow("Freq tolerance (±)", self.freq_tol_spin)
-        f.addRow(self.sig_enabled_check)
-        f.addRow(QLabel("Primary must have blink/freq that decoys don't share. Brightness alone never confirms (Plan §3). Spectral/challenge-response optional hooks."))
-
-        # Weights
-        wts = ai.get("weights", {})
-        self.w_app_spin = QDoubleSpinBox(); self.w_app_spin.setRange(0,1); self.w_app_spin.setSingleStep(0.05); self.w_app_spin.setValue(float(wts.get("appearance",0.20)))
-        self.w_sig_spin = QDoubleSpinBox(); self.w_sig_spin.setRange(0,1); self.w_sig_spin.setSingleStep(0.05); self.w_sig_spin.setValue(float(wts.get("signature",0.25)))
-        f.addRow("Weight appearance", self.w_app_spin)
-        f.addRow("Weight signature", self.w_sig_spin)
-        f.addRow(QLabel("IdentityScore = 0.20*appearance+0.20*motion+0.20*temporal+0.25*signature+0.15*estimator (Plan §6)."))
-
-        # Info: model paths
-        self.candidate_model_edit = QLineEdit(str(ai.get("candidate_model_path","")))
-        self.candidate_model_edit.setPlaceholderText("models/candidate_classifier/best.onnx  (empty = heuristic)")
-        self.identity_model_edit = QLineEdit(str(ai.get("identity_model_path","")))
-        self.identity_model_edit.setPlaceholderText("models/identity_classifier/best.onnx  (empty = heuristic voter)")
-        f.addRow("Candidate model", self.candidate_model_edit)
-        f.addRow("Identity model", self.identity_model_edit)
-        return w
-
-    def _input_tab(self):
-        w = QWidget(); f = QFormLayout(w)
-        self.input_combo = QComboBox(); self.input_combo.addItems(["SYNTHETIC","VIDEO"]); self.input_combo.setCurrentText(self.cfg["experiment"]["input_mode"])
-        self.video_path_edit = QLineEdit(self.cfg["experiment"].get("video_path",""))
-        self.btn_browse = QPushButton("Browse…")
-        h = QHBoxLayout(); h.addWidget(self.video_path_edit); h.addWidget(self.btn_browse)
-        f.addRow("Input mode", self.input_combo)
-        f.addRow("Video path", h)
-        # Video centre calibration (for external mp4 where image centre may be offset)
-        self.vid_centre_x_spin = QDoubleSpinBox(); self.vid_centre_x_spin.setRange(-100,100); self.vid_centre_x_spin.setSingleStep(1); self.vid_centre_x_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_x",0)))
-        self.vid_centre_y_spin = QDoubleSpinBox(); self.vid_centre_y_spin.setRange(-100,100); self.vid_centre_y_spin.setSingleStep(1); self.vid_centre_y_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_y",0)))
-        f.addRow("Video centre offset X (px)", self.vid_centre_x_spin)
-        f.addRow("Video centre offset Y (px)", self.vid_centre_y_spin)
-        f.addRow(QLabel("Calibrates image centre for mp4 input (0,0 = frame centre)"))
-        self.btn_browse.clicked.connect(self._browse)
-        return w
-
-    def _browse(self):
-        p,_ = QFileDialog.getOpenFileName(self, "Select video", "", "Video (*.mp4 *.avi *.mov)")
-        if p: self.video_path_edit.setText(p)
-
-    def _restore_defaults(self):
-        from ..config.defaults import DEFAULT_CONFIG
-        import copy
-        self.cfg = copy.deepcopy(DEFAULT_CONFIG)
-        self.reject()
-        QMessageBox.information(self.parent(), "Defaults","Defaults restored. Reopen Control Deck.")
-
-    def _apply(self):
-        c = self.cfg
-        # target — c["target"]["type"] = self.tgt_type_combo.currentText()
-        c["target"]["count"] = int(self.tgt_count_spin.value())
-        c["target"]["shape"] = self.tgt_shape_combo.currentText()
-        c["target"]["size"] = int(self.size_spin.value())
-        # initial location
-        mode = self.tgt_init_mode_combo.currentText()
-        c["target"]["initial_mode"] = mode
-        if mode == "random":
-            c["target"]["initial_pos"] = None
-        elif mode == "centre":
-            c["target"]["initial_pos"] = [int(c["world"]["width"]//2), int(c["world"]["height"]//2)]
-        else: # user-defined
-            c["target"]["initial_pos"] = [int(self.tgt_init_x_spin.value()), int(self.tgt_init_y_spin.value())]
-        c["target"]["trajectory"] = self.traj_combo.currentText()
-        c["target"]["speed_px_per_frame"] = float(self.speed_spin.value())
-        c["target"]["angle_deg"] = float(self.angle_spin.value())
-        c["target"]["radius"] = float(self.radius_spin.value())
-        # User-defined shape: custom polygon
-        if c["target"]["shape"] == "user-defined":
-            txt = self.custom_polygon_edit.text().strip()
-            if txt:
-                try:
-                    pts = []
-                    for part in txt.split(";"):
-                        part = part.strip()
-                        if not part:
-                            continue
-                        x_str, y_str = part.split(",")
-                        pts.append([int(float(x_str.strip())), int(float(y_str.strip()))])
-                    c["target"]["custom_polygon"] = pts if len(pts) >= 3 else None
-                except Exception:
-                    c["target"]["custom_polygon"] = None
-            else:
-                c["target"]["custom_polygon"] = None  # default 5-point star in World
-        else:
-            c["target"]["custom_polygon"] = None
-        # User-defined trajectory: custom CSV file
-        if c["target"]["trajectory"] == "user-defined":
-            c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None
-            c["target"]["custom_trajectory_path"] = c["target"]["custom_trajectory_file"]
-        else:
-            c["target"]["custom_trajectory_file"] = None
-            c["target"]["custom_trajectory_path"] = None
-        # camera — ,13-15
-        c["camera"]["type"] = self.cam_type_combo.currentText()
-        c["camera"]["resolution"] = [int(self.res_w_spin.value()), int(self.res_h_spin.value())]
-        c["camera"]["fov_deg"] = [float(self.fov_h_spin.value()), float(self.fov_v_spin.value())]
-        c["camera"]["fps"] = int(self.fps_spin.value())
-        c["camera"]["initial_position"] = self.cam_init_combo.currentText()
-        c["camera"]["initial_pan"] = float(self.cam_init_pan_spin.value())
-        c["camera"]["initial_tilt"] = float(self.cam_init_tilt_spin.value())
-        c["camera"]["max_pan_speed"] = float(self.max_pan_spin.value())
-        c["camera"]["max_tilt_speed"] = float(self.max_tilt_spin.value())
-        c["camera"]["update_interval_hz"] = int(self.update_hz_spin.value())
-        c["camera"]["jitter_px"] = float(self.jitter_spin.value())
-        # controller
-        c["controller"]["kp_pan"] = float(self.kp_pan_spin.value())
-        c["controller"]["kp_tilt"] = float(self.kp_tilt_spin.value())
-        c["controller"]["ki"] = float(self.ki_spin.value())
-        c["controller"]["kd"] = float(self.kd_spin.value())
-        c["controller"]["deadzone_px"] = float(self.dead_spin.value())
-        c["tracker"]["process_noise"] = float(self.proc_spin.value())
-        c["tracker"]["meas_noise"] = float(self.meas_spin.value())
-        # env — world + platform + stars/gradient/vignetting/brightness
-        c["world"]["width"] = int(self.world_w_spin.value())
-        c["world"]["height"] = int(self.world_h_spin.value())
-        c["world"]["background"] = int(self.world_bg_spin.value())
-        c["platform"]["type"] = self.platform_combo.currentText()
-        c["platform"]["speed_px_per_frame"] = float(self.platform_speed_spin.value())
-        if "environment" not in c:
-            c["environment"] = {}
-        env = c["environment"]
-        env["gradient_enabled"] = bool(self.grad_enabled.isChecked())
-        env["gradient_type"] = self.grad_type_combo.currentText()
-        env["gradient_top"] = int(self.grad_top_spin.value())
-        env["gradient_bottom"] = int(self.grad_bottom_spin.value())
-        env["gradient_angle"] = int(self.grad_angle_spin.value())
-        env["stars_enabled"] = bool(self.stars_enabled.isChecked())
-        env["stars_density"] = float(self.stars_density_spin.value())
-        env["stars_brightness"] = int(self.stars_brightness_spin.value())
-        env["stars_min_mag"] = int(self.stars_minmag_spin.value())
-        env["stars_max_mag"] = int(self.stars_maxmag_spin.value())
-        env["stars_twinkle"] = bool(self.stars_twinkle_check.isChecked())
-        env["stars_seed"] = int(self.stars_seed_spin.value())
-        env["vignetting_enabled"] = bool(self.vig_enabled.isChecked())
-        env["vignetting_strength"] = float(self.vig_strength_spin.value())
-        env["vignetting_radius"] = float(self.vig_radius_spin.value())
-        env["vignetting_falloff"] = float(self.vig_falloff_spin.value())
-        env["vignetting_center_x"] = float(self.vig_cx_spin.value())
-        env["vignetting_center_y"] = float(self.vig_cy_spin.value())
-        env["brightness_gain"] = float(self.bright_gain_spin.value())
-        env["brightness_offset"] = int(self.bright_offset_spin.value())
-        # disturb
-        c["atmosphere"]["type"] = self.atmo_combo.currentText()
-        c["atmosphere"]["strength"] = float(self.atmo_strength.value())
-        c["noise"]["gaussian_std"] = float(self.gauss_spin.value())
-        c["noise"]["salt_pepper_prob"] = float(self.spp_spin.value())
-        c["noise"]["gaussian_enabled"] = bool(self.gauss_check.isChecked())
-        c["noise"]["salt_pepper_enabled"] = bool(self.spp_check.isChecked())
-        c["noise"]["poisson"] = bool(self.poisson_check.isChecked())
-        # search
-        c["tracker"]["lost_timeout_frames"] = int(self.search_local_spin.value()) * 5
-        c["tracker"]["reacq_timeout_frames"] = int(self.search_spiral_spin.value())
-        if "search" not in c:
-            c["search"] = {}
-        c["search"]["roi_size"] = int(self.search_roi_spin.value())
-        if "ai" not in c:
-            c["ai"] = {}
-        c["ai"]["search_ranking"] = bool(self.search_ai_check.isChecked())
-        # detection
-        if "detector" not in c:
-            c["detector"] = {}
-        c["detector"]["threshold_k"] = float(self.det_thr_spin.value())
-        c["detector"]["min_area"] = int(self.det_min_spin.value())
-        c["detector"]["max_area"] = int(self.det_max_spin.value())
-        c["detector"]["blur_ksize"] = int(self.det_blur_spin.value())
-        c["ai"]["detection_threshold"] = float(self.det_conf_spin.value())
-        # if detection model path set via detection tab, prefer it; else keep AI tab path
-        det_model = self.det_model_edit.text().strip()
-        if det_model:
-            c["ai"]["candidate_model_path"] = det_model
-        # input/exp + video centre calibration (for mp4 where image centre may be offset)
-        c["experiment"]["seed"] = int(self.seed_spin.value())
-        c["experiment"]["duration_s"] = float(self.duration_spin.value())
-        c["experiment"]["input_mode"] = self.input_combo.currentText()
-        c["experiment"]["video_path"] = self.video_path_edit.text().strip()
-        c["camera"]["video_centre_offset_x"] = float(self.vid_centre_x_spin.value())
-        c["camera"]["video_centre_offset_y"] = float(self.vid_centre_y_spin.value())
-        # AI — use global master toggle (syncs with Identity tab)
-        if "ai" not in c:
-            c["ai"] = {}
-        # global checkbox is source of truth if exists, else fallback to identity tab
-        ai_on = self.global_ai_check.isChecked() if hasattr(self, 'global_ai_check') else self.ai_enabled_check.isChecked()
-        c["ai"]["enabled"] = bool(ai_on)
-        if "thresholds" not in c["ai"]:
-            c["ai"]["thresholds"] = {}
-        c["ai"]["thresholds"]["primary_threshold"] = float(self.primary_thr_spin.value())
-        c["ai"]["thresholds"]["decoy_threshold"] = float(self.decoy_thr_spin.value())
-        c["ai"]["thresholds"]["confirmation_frames"] = int(self.confirm_spin.value())
-        if "signatures" not in c["ai"]:
-            c["ai"]["signatures"] = {}
-        c["ai"]["signatures"]["blink_pattern"] = self.blink_edit.text().strip() or "10110010"
-        c["ai"]["signatures"]["modulation_freq_hz"] = float(self.freq_spin.value())
-        c["ai"]["signatures"]["freq_tolerance"] = float(self.freq_tol_spin.value())
-        c["ai"]["signatures"]["enabled"] = bool(self.sig_enabled_check.isChecked())
-        c["ai"]["candidate_model_path"] = self.candidate_model_edit.text().strip()
-        c["ai"]["identity_model_path"] = self.identity_model_edit.text().strip()
-        if "weights" not in c["ai"]:
-            c["ai"]["weights"] = {}
-        c["ai"]["weights"]["appearance"] = float(self.w_app_spin.value())
-        c["ai"]["weights"]["signature"] = float(self.w_sig_spin.value())
-        # keep other weights default
-        c["ai"]["weights"].setdefault("motion", 0.20)
-        c["ai"]["weights"].setdefault("temporal", 0.20)
-        c["ai"]["weights"].setdefault("estimator", 0.15)
-        # mirror to primary_target for World blink simulation
-        if "primary_target" not in c:
-            c["primary_target"] = {}
-        if "optical_signature" not in c["primary_target"]:
-            c["primary_target"]["optical_signature"] = {}
-        c["primary_target"]["optical_signature"]["blink_pattern"] = c["ai"]["signatures"]["blink_pattern"]
-        c["primary_target"]["optical_signature"]["modulation_freq_hz"] = c["ai"]["signatures"]["modulation_freq_hz"]
-        c["primary_target"]["optical_signature"]["freq_tolerance"] = c["ai"]["signatures"]["freq_tolerance"]
-        c["primary_target"]["optical_signature"]["enabled"] = c["ai"]["signatures"]["enabled"]
-        self.configApplied.emit(c)
+            staged = panel.collect_config()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Invalid settings", f"Cannot apply the active portion:\n{exc}"
+            )
+            return
+        self._profiles[self._active_system] = copy.deepcopy(staged)
+        self.cfg = copy.deepcopy(staged)
+        self._sync_compat_from_active(panel.current_preset())
+        self._sync_global_from_active()
+        self.configApplied.emit(copy.deepcopy(staged))
         self.accept()

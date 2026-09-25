@@ -1,0 +1,56 @@
+{
+  "model": "MobileNetV3-Small",
+  "status": "trained",
+  "checkpoint": "models\\candidate_classifier\\candidate_model.pt",
+  "best_epoch": 3,
+  "epochs_run": 10,
+  "val_metrics": {
+    "per_class_precision": {
+      "BEACON_LIKE": 0.7967213114754098,
+      "DECOY_LIKE": 0.5901639344262295,
+      "NOISE": 0.0,
+      "UNKNOWN": 0.0
+    },
+    "per_class_recall": {
+      "BEACON_LIKE": 0.7714285714285715,
+      "DECOY_LIKE": 0.6352941176470588,
+      "NOISE": 0.0,
+      "UNKNOWN": 0.0
+    },
+    "false_primary_rate": 0.12704918032786885,
+    "decoy_rejection_rate": 0.6352941176470588,
+    "unknown_precision": 0.0,
+    "accuracy": 0.7192622950819673,
+    "latency_ms_per_patch": 0.22741146334335727
+  },
+  "confusion_matrix": [
+    [
+      243,
+      72,
+      0,
+      0
+    ],
+    [
+      62,
+      108,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      3,
+      0,
+      0
+    ]
+  ],
+  "train_samples": 3493,
+  "val_samples": 488,
+  "seed": 42,
+  "val_metric": "f1_beacon"
+}

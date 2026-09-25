@@ -54,6 +54,9 @@ def load_base_cfg(path: pathlib.Path):
 
 def scenario_cfg(base: dict, seed: int, scenario_idx: int):
     cfg = copy.deepcopy(base)
+    # blink signatures must be active for data generation (Plan §8) — AI
+    # runtime state does not affect the simulator's rendering path
+    cfg["ai"]["enabled"] = True
     # vary disturbances per scenario for coverage
     rng = np.random.default_rng(seed)
     # choose hard-negative type based on idx
@@ -233,28 +236,42 @@ def main():
             # determine label: if track ever near primary GT for >50% of frames -> PRIMARY, near decoy -> DECOY else UNKNOWN
             # Use blink pattern correlation as proxy: if track's blink_history correlates with primary pattern -> PRIMARY
             from fsoc_tracker.ai.signatures import blink_correlation
-            corr_primary = blink_correlation(tr.blink_history[-8:], "10110010") if tr.blink_history else 0.0
-            corr_decoy = blink_correlation(tr.blink_history[-8:], "11100011") if tr.blink_history else 0.0
-            if corr_primary > 0.75:
+            # check against the full decoy pattern set (World assigns decoy
+            # options cyclically — matching only one pattern mislabels tracks)
+            DECOY_PATTERNS = ("11100011", "10101010", "11001100", "00011100")
+            # use last 8 frames (one full pattern period)
+            hist = tr.blink_history[-8:] if tr.blink_history else []
+            corr_primary = blink_correlation(hist, "10110010") if hist else 0.0
+            corr_decoy = max((blink_correlation(hist, p) for p in DECOY_PATTERNS), default=0.0) if hist else 0.0
+            # 10110010 at phase-shift 4 equals 00011100 (a decoy pattern) —
+            # prefer PRIMARY when both match (disambiguation rule)
+            if corr_primary > 0.75 and corr_primary >= corr_decoy:
                 seq_label = "PRIMARY"
-            elif corr_decoy > 0.70 or tr.is_rejected_decoy:
+            elif corr_decoy > corr_primary and corr_decoy > 0.70:
                 seq_label = "DECOY"
-            elif len(tr.position_history) < 12:
-                seq_label = "UNKNOWN"
             else:
                 seq_label = "UNKNOWN"
-            # build sequence array (T, D) — simplified: position + velocity + brightness + blink + innovation + IMM
+            # build sequence array (T, D=11) — GRU feature layout (Plan §9.1 Stage 2):
+            # [px, py, vx, vy, brightness, shape_stability, blink, innovation, imm_cv, imm_ca, imm_mn]
             T = min(len(tr.position_history), seq_len)
-            seq = np.zeros((seq_len, 10), dtype=np.float32)  # simplified 10-dim
+            seq = np.zeros((seq_len, 11), dtype=np.float32)
             mask = np.zeros((seq_len,), dtype=np.float32)
             start = seq_len - T
+            sizes = np.array(tr.size_history, dtype=np.float32) if tr.size_history else np.array([0.0])
             for i in range(T):
                 idx = len(tr.position_history) - T + i
                 px, py = tr.position_history[idx]
                 vx, vy = tr.velocity_history[idx] if idx < len(tr.velocity_history) else (0,0)
                 br = tr.brightness_history[idx] if idx < len(tr.brightness_history) else 0
                 blink = tr.blink_history[idx] if idx < len(tr.blink_history) else 0
-                seq[start+i] = [px/2000, py/2000, vx/20, vy/20, br/255, blink, 0, 0.6,0.25,0.15]
+                inno = tr.innovation_history[idx] if idx < len(tr.innovation_history) else 0.0
+                # shape stability: 1 - normalized rolling std of size history
+                if len(sizes[: idx + 1]) > 1:
+                    shape_stab = float(np.clip(1.0 - np.std(sizes[: idx + 1]) / 20.0, 0, 1))
+                else:
+                    shape_stab = 1.0
+                seq[start+i] = [px/640, py/480, np.clip(vx/20, -1, 1), np.clip(vy/20, -1, 1),
+                                br/255, shape_stab, blink, inno/50, 0.6, 0.25, 0.15]
                 mask[start+i] = 1.0
             # save sequence as npz
             seq_fname = f"seed{seed}_track{tid:03d}_{seq_label}.npz"

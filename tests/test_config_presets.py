@@ -1,23 +1,26 @@
-"""Tests for config loader, defaults, schema and preset discovery (Control Deck)."""
+"""Tests for config loading, validation, and curated/benchmark presets."""
 
-import os
-import glob
 import copy
-import yaml
-import pytest
+import os
 
-from fsoc_tracker.config.loader import load_config, deep_merge, save_config
-from fsoc_tracker.config.defaults import DEFAULT_CONFIG
+import pytest
+import yaml
+
+from fsoc_tracker.config.loader import deep_merge, load_config, save_config
+from fsoc_tracker.config.presets import discover_presets
 from fsoc_tracker.config.schema import validate_config
 
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-CONFIGS_DIR = os.path.join(ROOT, "configs")
+BENCHMARKS_DIR = os.path.join(ROOT, "configs", "benchmarks")
+PRESETS_DIR = os.path.join(ROOT, "configs", "presets")
+
 
 def test_defaults_validate():
     cfg = load_config()
-    # Should not raise
     assert cfg["world"]["width"] == 2000
     assert cfg["camera"]["resolution"] == [640, 480]
+
 
 def test_deep_merge():
     a = {"x": {"a": 1, "b": 2}, "y": 5}
@@ -26,22 +29,25 @@ def test_deep_merge():
     assert out["x"] == {"a": 1, "b": 3, "c": 4}
     assert out["y"] == 5
     assert out["z"] == 9
-    # original not mutated
     assert a["x"]["b"] == 2
+
 
 def test_overrides():
     cfg = load_config(overrides={"target": {"speed_px_per_frame": 9.9}})
     assert cfg["target"]["speed_px_per_frame"] == pytest.approx(9.9)
 
+
 def test_nonexistent_path_uses_defaults():
     cfg = load_config("nonexistent.yaml")
     assert cfg["experiment"]["seed"] == 42
 
+
 def test_schema_rejects_bad_world():
     cfg = load_config()
-    cfg["world"]["width"] = 100  # below 2000
+    cfg["world"]["width"] = 100
     with pytest.raises(AssertionError):
         validate_config(cfg)
+
 
 def test_schema_rejects_bad_fov():
     cfg = load_config()
@@ -49,45 +55,53 @@ def test_schema_rejects_bad_fov():
     with pytest.raises(AssertionError):
         validate_config(cfg)
 
+
 def test_schema_allows_user_defined_shape():
     cfg = load_config()
     cfg["target"]["shape"] = "user-defined"
-    cfg["target"]["custom_polygon"] = [[-5,-5],[5,-5],[0,5]]
-    # should not raise after patch
+    cfg["target"]["custom_polygon"] = [[-5, -5], [5, -5], [0, 5]]
     validate_config(cfg)
 
-@pytest.mark.parametrize("preset_file", sorted(glob.glob(os.path.join(CONFIGS_DIR, "P*.yaml"))))
-def test_each_preset_loads_and_validates(preset_file):
+
+@pytest.mark.parametrize(
+    "preset_file",
+    sorted(
+        os.path.join(BENCHMARKS_DIR, name)
+        for name in os.listdir(BENCHMARKS_DIR)
+        if name.startswith("P") and name.endswith(".yaml")
+    ),
+)
+def test_each_benchmark_loads_and_validates(preset_file):
     cfg = load_config(preset_file)
     assert "world" in cfg and "camera" in cfg and "target" in cfg
     assert 0 <= cfg["experiment"]["seed"] <= 999999
-    # fps in allowed
     assert 30 <= cfg["camera"]["fps"] <= 60
-    # jitter in allowed
     assert 0 <= cfg["camera"]["jitter_px"] <= 20
-    # noise in allowed
     assert 0 <= cfg["noise"]["gaussian_std"] <= 20
     assert 0 <= cfg["noise"]["salt_pepper_prob"] <= 0.15
-    # preset_meta present and well-formed
     meta = cfg.get("preset_meta", {})
     assert "preset" in meta, f"{preset_file} missing preset_meta.preset"
     assert "purpose" in meta
     assert "expected" in meta
     assert isinstance(meta["expected"], dict)
 
-def test_all_12_presets_present():
-    files = sorted(glob.glob(os.path.join(CONFIGS_DIR, "P*.yaml")))
-    assert len(files) == 12, f"Expected 12 presets, found {len(files)}: {files}"
-    # seeds 42..53 in order
-    seeds = [load_config(p)["experiment"]["seed"] for p in files]
-    assert seeds == list(range(42, 54)), f"Seeds not 42..53: {seeds}"
-    # trajectories coverage
-    trajs = {load_config(p)["target"]["trajectory"] for p in files}
+
+def test_all_12_benchmarks_present():
+    files = sorted(
+        os.path.join(BENCHMARKS_DIR, name)
+        for name in os.listdir(BENCHMARKS_DIR)
+        if name.startswith("P") and name.endswith(".yaml")
+    )
+    assert len(files) == 12, f"Expected 12 benchmark scenarios, found {len(files)}"
+    seeds = [load_config(path)["experiment"]["seed"] for path in files]
+    assert seeds == list(range(42, 54))
+    trajectories = {load_config(path)["target"]["trajectory"] for path in files}
     for needed in ["straight", "circular", "figure_eight", "random"]:
-        assert needed in trajs, f"Missing trajectory {needed} in {trajs}"
+        assert needed in trajectories
+
 
 def test_p01_shared_defaults():
-    cfg = load_config(os.path.join(CONFIGS_DIR, "P01_clean_baseline.yaml"))
+    cfg = load_config(os.path.join(BENCHMARKS_DIR, "P01_clean_baseline.yaml"))
     assert cfg["camera"]["fov_deg"] == [4.0, 3.0]
     assert cfg["camera"]["max_pan_speed"] == 5.0
     assert cfg["target"]["size"] == 10
@@ -95,20 +109,22 @@ def test_p01_shared_defaults():
     assert cfg["controller"]["kd"] == pytest.approx(0.15)
     assert cfg["tracker"]["gate_sigma"] == pytest.approx(3.0)
 
+
 def test_p11_visibility_schedule_preserved():
-    cfg = load_config(os.path.join(CONFIGS_DIR, "P11_forced_loss_reacquisition.yaml"))
-    # visible via either cfg["target"] or top-level
-    sched = cfg["target"].get("visibility_schedule") or cfg.get("visibility_schedule")
-    assert sched is not None
-    assert len(sched) == 3
-    assert sched[1][2] == "hidden"
+    cfg = load_config(os.path.join(BENCHMARKS_DIR, "P11_forced_loss_reacquisition.yaml"))
+    schedule = cfg["target"].get("visibility_schedule") or cfg.get("visibility_schedule")
+    assert schedule is not None
+    assert len(schedule) == 3
+    assert schedule[1][2] == "hidden"
+
 
 def test_p12_video_fields():
-    cfg = load_config(os.path.join(CONFIGS_DIR, "P12_external_mp4_benchmark.yaml"))
+    cfg = load_config(os.path.join(BENCHMARKS_DIR, "P12_external_mp4_benchmark.yaml"))
     assert cfg["experiment"]["input_mode"] == "VIDEO"
     assert cfg["experiment"]["video_path"] == "data/input_videos/test_beacon.mp4"
     assert cfg["experiment"].get("preserve_native_fps") is True
     assert cfg["experiment"].get("bypass_virtual_ptz") is True
+
 
 def test_save_and_reload_roundtrip(tmp_path):
     cfg = load_config()
@@ -120,40 +136,54 @@ def test_save_and_reload_roundtrip(tmp_path):
     assert reloaded["target"]["speed_px_per_frame"] == pytest.approx(7.7)
     assert reloaded["experiment"]["seed"] == 12345
 
-def test_control_deck_discovers_presets_headless():
-    """Control Deck must discover P01-P12 without launching GUI window."""
-    import glob as _glob
-    preset_files = sorted(_glob.glob(os.path.join(CONFIGS_DIR, "*.yaml")))
-    # Simulate ControlDeck discovery logic
-    preset_map = {}
-    for pf in preset_files:
-        base = os.path.splitext(os.path.basename(pf))[0]
-        if base.startswith("P") and "_" in base:
-            prefix = base[:3]
-            rest = base[4:] if len(base) > 4 else base[3:]
-            pretty = f"{prefix} - {rest.replace('_',' ').title()}"
-        else:
-            pretty = base.replace("_"," ").title()
-        preset_map[pretty] = pf
-    assert "P01 - Clean Baseline" in preset_map
-    assert "P12 - External Mp4 Benchmark" in preset_map
-    assert len([k for k in preset_map if k.startswith("P")]) == 12
-    # Each file must yaml-load
-    for pretty, pf in preset_map.items():
-        if pretty.startswith("P"):
-            data = yaml.safe_load(open(pf, encoding="utf-8")) or {}
-            assert "preset_meta" in data
+
+def test_curated_gui_presets_are_exactly_four_and_declare_ai_mode():
+    presets = discover_presets(PRESETS_DIR)
+    assert [preset.preset_id for preset in presets] == [
+        "ai_primary_decoys",
+        "classical_baseline",
+        "ai_robustness",
+        "video_benchmark",
+    ]
+    assert [preset.ai_mode for preset in presets] == ["ON", "OFF", "ON", "OFF"]
+    for preset in presets:
+        assert os.path.exists(preset.path)
+        cfg = load_config(str(preset.path))
+        assert cfg["ai"]["enabled"] is preset.is_ai_preset
+        assert "purpose" in preset.__dict__
+        assert isinstance(preset.expected, dict)
+
+
+def test_curated_preset_metadata_and_targets():
+    ai = load_config(os.path.join(PRESETS_DIR, "01_ai_primary_decoys.yaml"))
+    assert ai["target"]["count"] == 3
+    assert ai["ai"]["enabled"] is True
+    assert len(ai["decoys"]["profiles"]) == 2
+    classical = load_config(os.path.join(PRESETS_DIR, "02_classical_baseline.yaml"))
+    assert classical["target"]["count"] == 1
+    assert classical["ai"]["enabled"] is False
+    robustness = load_config(os.path.join(PRESETS_DIR, "03_ai_robustness.yaml"))
+    assert robustness["ai"]["enabled"] is True
+    assert robustness["camera"]["jitter_px"] > 0
+    assert robustness["noise"]["gaussian_enabled"] is True
+
+
+def test_benchmark_files_are_not_gui_presets():
+    gui_ids = {preset.preset_id for preset in discover_presets(PRESETS_DIR)}
+    assert not any(preset_id.startswith("P") for preset_id in gui_ids)
+    assert not any("P01" in preset.display_name for preset in discover_presets(PRESETS_DIR))
+
 
 def test_p09_platform_extra_fields_preserved():
-    cfg = load_config(os.path.join(CONFIGS_DIR, "P09_linear_platform_motion.yaml"))
-    plat = cfg["platform"]
-    assert plat["type"] == "linear"
-    # extra fields from preset plan preserved via deep_merge passthrough
-    assert plat.get("velocity_px_frame") == [12, -8]
-    assert plat.get("max_displacement_px") == 500
+    cfg = load_config(os.path.join(BENCHMARKS_DIR, "P09_linear_platform_motion.yaml"))
+    platform = cfg["platform"]
+    assert platform["type"] == "linear"
+    assert platform.get("velocity_px_frame") == [12, -8]
+    assert platform.get("max_displacement_px") == 500
+
 
 def test_search_fields_preserved():
-    for pid in ["P10_edge_of_fov_acquisition", "P11_forced_loss_reacquisition"]:
-        cfg = load_config(os.path.join(CONFIGS_DIR, f"{pid}.yaml"))
+    for preset_id in ["P10_edge_of_fov_acquisition", "P11_forced_loss_reacquisition"]:
+        cfg = load_config(os.path.join(BENCHMARKS_DIR, f"{preset_id}.yaml"))
         assert "search" in cfg
         assert "mode" in cfg["search"]
