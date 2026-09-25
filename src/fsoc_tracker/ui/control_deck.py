@@ -9,11 +9,31 @@ class ControlDeck(QDialog):
     def __init__(self, cfg, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Control Deck  —  FSOC Tracker")
-        self.resize(620, 780)
+        self.resize(640, 820)
         self.cfg = cfg
         from .theme import STYLESHEET
         self.setStyleSheet(STYLESHEET)
         lay = QVBoxLayout(self)
+        # Global AI master toggle (simple, always visible)
+        ai = self.cfg.get("ai", {})
+        head = QHBoxLayout()
+        head.setContentsMargins(6,6,6,6)
+        ai_lbl = QLabel("AI Mode")
+        ai_lbl.setStyleSheet("font-weight:800; font-size:12px;")
+        self.global_ai_check = QCheckBox("AI ON — primary/decoy identification (MobileNet+GRU, 5-frame confirm)")
+        self.global_ai_check.setChecked(bool(ai.get("enabled", False)))
+        self.global_ai_check.setStyleSheet("font-weight:700; color:#1e40af;")
+        self.global_ai_check.toggled.connect(self._on_global_ai_toggled)
+        head.addWidget(ai_lbl)
+        head.addWidget(self.global_ai_check)
+        head.addStretch()
+        lay.addLayout(head)
+        # hint
+        self.ai_hint = QLabel("AI OFF: classical detector → EKF-IMM → PID only. Tracks table & Identity card hidden. AI ON: shows Search-AI, Detection-AI, Identity thresholds & signatures.")
+        self.ai_hint.setWordWrap(True)
+        self.ai_hint.setStyleSheet("color:#64748b; font-size:10px; background:#f1f5f9; padding:6px; border-radius:6px;")
+        lay.addWidget(self.ai_hint)
+
         self.tabs = QTabWidget()
         lay.addWidget(self.tabs)
 
@@ -37,6 +57,56 @@ class ControlDeck(QDialog):
         self.btn_apply.clicked.connect(self._apply)
         self.btn_cancel.clicked.connect(self.reject)
         self.btn_reset.clicked.connect(self._restore_defaults)
+        # initial AI visibility sync (defer until widgets exist)
+        self._ai_sync_pending = True
+
+    def showEvent(self, event):
+        # sync AI UI on first show (all tabs/widgets now created)
+        if getattr(self, '_ai_sync_pending', False):
+            self._ai_sync_pending = False
+            self._sync_ai_ui()
+            # wire global ↔ identity checkbox sync
+            try:
+                self.global_ai_check.toggled.connect(self._on_global_ai_toggled)
+                self.ai_enabled_check.toggled.connect(lambda v: self.global_ai_check.setChecked(v) if self.global_ai_check.isChecked()!=v else None)
+            except Exception:
+                pass
+        super().showEvent(event)
+
+    def _on_global_ai_toggled(self, checked):
+        # sync identity tab checkbox and update UI
+        try:
+            if hasattr(self, 'ai_enabled_check') and self.ai_enabled_check.isChecked() != checked:
+                self.ai_enabled_check.setChecked(checked)
+        except Exception:
+            pass
+        self._sync_ai_ui()
+
+    def _sync_ai_ui(self):
+        enabled = self.global_ai_check.isChecked() if hasattr(self, 'global_ai_check') else False
+        # hint
+        try:
+            self.ai_hint.setText("AI ON: Multi-candidate + blink signature + 5-frame confirm → only PRIMARY drives PID. Search/Detection/Identity sections active." if enabled else "AI OFF: Classical single-target detector → EKF-IMM → PID only. Search/Detection AI and Identity thresholds hidden/disabled.")
+            self.ai_hint.setStyleSheet(f"color:{'#065f46' if enabled else '#64748b'}; font-size:10px; background:{'#ecfdf5' if enabled else '#f1f5f9'}; padding:6px; border-radius:6px; border:1px solid {'#a7f3d0' if enabled else '#e2e8f0'};")
+        except Exception:
+            pass
+        # enable/disable AI-related fields
+        for name in ("search_ai_check", "det_conf_spin", "det_model_edit", "primary_thr_spin", "decoy_thr_spin", "confirm_spin", "blink_edit", "freq_spin", "freq_tol_spin", "sig_enabled_check", "candidate_model_edit", "identity_model_edit", "w_app_spin", "w_sig_spin"):
+            w = getattr(self, name, None)
+            if w is not None:
+                w.setEnabled(enabled)
+                w.setToolTip("" if enabled else "Enable AI mode to configure")
+        # dim Search/Detection/Identity tabs when AI OFF (keep them but visually muted)
+        try:
+            for idx in range(self.tabs.count()):
+                text = self.tabs.tabText(idx)
+                if text in ("Search", "Detection", "Identity"):
+                    self.tabs.setTabEnabled(idx, True)  # keep enabled but hint via enabled fields
+                    # optional: add • AI suffix
+                    base = text.split(" •")[0]
+                    self.tabs.setTabText(idx, f"{base} • AI" if enabled else base)
+        except Exception:
+            pass
 
     def _presets_tab(self):
         w = QWidget(); f = QFormLayout(w)
@@ -286,7 +356,12 @@ class ControlDeck(QDialog):
             ai = self.cfg.get("ai", {})
             thr = ai.get("thresholds", {})
             sig = ai.get("signatures", ai.get("signature", {})) if isinstance(ai, dict) else {}
-            self.ai_enabled_check.setChecked(bool(ai.get("enabled", False)))
+            enabled = bool(ai.get("enabled", False))
+            self.ai_enabled_check.setChecked(enabled)
+            try:
+                self.global_ai_check.setChecked(enabled)
+            except Exception:
+                pass
             self.primary_thr_spin.setValue(float(thr.get("primary_threshold",0.85)))
             self.decoy_thr_spin.setValue(float(thr.get("decoy_threshold",0.85)))
             self.confirm_spin.setValue(int(thr.get("confirmation_frames",5)))
@@ -296,6 +371,10 @@ class ControlDeck(QDialog):
             self.sig_enabled_check.setChecked(bool(sig.get("enabled", True)))
             self.candidate_model_edit.setText(str(ai.get("candidate_model_path","")))
             self.identity_model_edit.setText(str(ai.get("identity_model_path","")))
+            try:
+                self._sync_ai_ui()
+            except Exception:
+                pass
             # Search
             trk = self.cfg.get("tracker", {})
             self.search_local_spin.setValue(int(trk.get("lost_timeout_frames",15)//5) if trk.get("lost_timeout_frames",15)>=5 else 3)
@@ -879,10 +958,12 @@ class ControlDeck(QDialog):
         c["experiment"]["video_path"] = self.video_path_edit.text().strip()
         c["camera"]["video_centre_offset_x"] = float(self.vid_centre_x_spin.value())
         c["camera"]["video_centre_offset_y"] = float(self.vid_centre_y_spin.value())
-        # AI
+        # AI — use global master toggle (syncs with Identity tab)
         if "ai" not in c:
             c["ai"] = {}
-        c["ai"]["enabled"] = bool(self.ai_enabled_check.isChecked())
+        # global checkbox is source of truth if exists, else fallback to identity tab
+        ai_on = self.global_ai_check.isChecked() if hasattr(self, 'global_ai_check') else self.ai_enabled_check.isChecked()
+        c["ai"]["enabled"] = bool(ai_on)
         if "thresholds" not in c["ai"]:
             c["ai"]["thresholds"] = {}
         c["ai"]["thresholds"]["primary_threshold"] = float(self.primary_thr_spin.value())

@@ -121,14 +121,16 @@ class MainWindow(QMainWindow):
         mid.addWidget(self.world_view, 1)
         root.addLayout(mid, 1)
 
-        # Target tracks & identity panel (Plan §16.5)
+        # Target tracks & identity panel (Plan §16.5) — visible only when AI ON (progressive disclosure)
         self.tracks_view = TracksView(self)
+        self.tracks_view.setVisible(bool(self.cfg.get("ai", {}).get("enabled", False)))
         root.addWidget(self.tracks_view)
 
         # Live Dashboard is now in a separate window (not embedded) — see LiveDashboardWindow
         self.live_window = LiveDashboardWindow(self)
         self.dashboard = self.live_window.dashboard
         self.live_window.hide()
+        # hint for AI OFF: collapsed tracks + reduced height
 
         # Internal flags replacing removed info strip + bottom bar (sections removed per request)
         # Overlays/grid/debug remain functional via defaults; control via Control Deck if needed
@@ -239,9 +241,18 @@ class MainWindow(QMainWindow):
 
     def _on_config_applied(self, cfg):
         self.cfg = cfg
+        # progressive disclosure: AI tracks visible only when AI ON
+        try:
+            ai_on = bool(cfg.get("ai", {}).get("enabled", False))
+            self.tracks_view.setVisible(ai_on)
+            # resize to reclaim space when AI OFF
+            if not ai_on:
+                self.tracks_view.clear()
+        except Exception:
+            pass
         self._create_source()
         self.reset_run()
-        self.statusBar().showMessage("Configuration applied  —  ready to Run")
+        self.statusBar().showMessage(f"Configuration applied — AI {'ON' if ai_on else 'OFF'} — ready to Run")
 
     def start_run(self):
         if self.running and not self.paused:
