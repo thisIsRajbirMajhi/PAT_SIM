@@ -150,6 +150,16 @@ class Dashboard(QWidget):
         self.s_lock.add_row("loss_pct", "Target loss", mono=True)
         self.s_lock.add_row("loss_cnt", "Loss count", mono=True)
 
+        self.s_identity = SectionCard("IDENTITY  ·  AI")
+        self.s_identity.add_row("ident_state", "Identity", mono=True)
+        self.s_identity.add_row("prim_conf", "Primary conf", mono=True)
+        self.s_identity.add_row("sig_score", "Signature", mono=True)
+        self.s_identity.add_row("decoys_rej", "Decoys rejected", mono=True)
+        self.s_identity.add_row("unknown_cnt", "Unknown cand.", mono=True)
+        self.s_identity.add_row("id_switch", "Identity switches", mono=True)
+        self.s_identity.add_row("t_ident", "Time to identify", mono=True)
+        self.s_identity.add_row("model_ver", "Model version", mono=True)
+
         self.s_estimator = SectionCard("ESTIMATOR  ·  EKF-IMM")
         self.s_estimator.add_row("cv", "Model CV", mono=True)
         self.s_estimator.add_row("ca", "Model CA", mono=True)
@@ -206,17 +216,18 @@ class Dashboard(QWidget):
         self.s_counts.add_row("frame_id", "Frame ID", mono=True)
         self.s_counts.add_row("elapsed", "Elapsed", mono=True)
 
-        # layout: 4 columns × 2 rows = 8 cards
-        cards = [self.s_tracking, self.s_accuracy, self.s_timing, self.s_lock,
-                 self.s_estimator, self.s_controller, self.s_env, self.s_counts]
+        # layout: 3 columns × 3 rows = 9 cards (adds Identity)
+        cards = [self.s_tracking, self.s_accuracy, self.s_timing,
+                 self.s_lock, self.s_identity, self.s_estimator,
+                 self.s_controller, self.s_env, self.s_counts]
         for i, c in enumerate(cards):
-            r = i // 4
-            col = i % 4
+            r = i // 3
+            col = i % 3
             self.grid.addWidget(c, r, col)
-        for col in range(4):
+        for col in range(3):
             self.grid.setColumnStretch(col, 1)
-        self.grid.setRowStretch(0, 1)
-        self.grid.setRowStretch(1, 1)
+        for r in range(3):
+            self.grid.setRowStretch(r, 1)
 
         outer.addWidget(container)
 
@@ -245,7 +256,8 @@ class Dashboard(QWidget):
                         cam_type="monochrome", cam_res="640×480", cam_fov="4.0×3.0", cam_fps=30, cam_init="centre",
                         tgt_type="beacon_spot", tgt_count=1, tgt_shape="square", tgt_init="random",
                         max_pan=5.0, max_tilt=5.0, update_hz=30,
-                        atmo_strength=0.0, gauss_std=0.0, spp_prob=0.0, poisson_enabled=False, platform_speed=0.0):
+                        atmo_strength=0.0, gauss_std=0.0, spp_prob=0.0, poisson_enabled=False, platform_speed=0.0,
+                        ai_enabled=False, ai_state="—", prim_conf=0.0, sig_score=0.0, decoys_rej=0, unknown_cnt=0, id_switches=0, t_ident=None, model_ver="heuristic"):
         # helper to format
         def fmt(v, nd=1, unit=""):
             if v is None:
@@ -350,6 +362,23 @@ class Dashboard(QWidget):
         self.s_lock.badge.setText("✓" if loss_pct < 5 and (acq_time is None or acq_time <= 2.0) else "✗")
         self.s_lock.badge.setStyleSheet(f"color:{COLORS['success'] if (loss_pct <5) else COLORS['danger']}; font-size:10px;")
         self.s_lock.dot.setStyleSheet(f"color:{loss_c}; font-size:10px;")
+
+        # --- IDENTITY ---
+        ident_col = COLORS["success"] if ai_state == "PRIMARY_CONFIRMED" else (COLORS["danger"] if ai_state == "DECOY_CONFIRMED" else COLORS["muted"])
+        self.s_identity.row("ident_state").set_value(ai_state, color=ident_col)
+        self.s_identity.row("prim_conf").set_value(f"{prim_conf*100:.0f}", color=ident_col)
+        self.s_identity.row("prim_conf").unit.setText("%")
+        self.s_identity.row("sig_score").set_value(f"{sig_score*100:.0f}", color=COLORS["accent"] if sig_score>0.65 else COLORS["muted"])
+        self.s_identity.row("sig_score").unit.setText("%")
+        self.s_identity.row("decoys_rej").set_value(f"{decoys_rej}")
+        self.s_identity.row("unknown_cnt").set_value(f"{unknown_cnt}")
+        self.s_identity.row("id_switch").set_value(f"{id_switches}", color=COLORS["danger"] if id_switches>2 else COLORS["text"])
+        self.s_identity.row("t_ident").set_value(fmt(t_ident,2) if t_ident is not None else "—")
+        self.s_identity.row("t_ident").unit.setText("s")
+        self.s_identity.row("model_ver").set_value(model_ver, color=COLORS["subtle"])
+        self.s_identity.dot.setStyleSheet(f"color:{ident_col}; font-size:10px;")
+        self.s_identity.badge.setText("AI ON" if ai_enabled else "AI OFF")
+        self.s_identity.badge.setStyleSheet(f"color:{COLORS['success'] if ai_enabled else COLORS['muted']}; font-size:10px; font-weight:700;")
 
         # --- ESTIMATOR ---
         self.s_estimator.row("cv").set_value(f"{model_probs[0]:.2f}")

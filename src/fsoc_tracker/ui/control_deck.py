@@ -18,12 +18,14 @@ class ControlDeck(QDialog):
         lay.addWidget(self.tabs)
 
         self.tabs.addTab(self._presets_tab(), "Presets & Run")
-        self.tabs.addTab(self._target_tab(), "Target")
+        self.tabs.addTab(self._target_tab(), "Target & Decoys")
+        self.tabs.addTab(self._search_tab(), "Search")
+        self.tabs.addTab(self._detection_tab(), "Detection")
+        self.tabs.addTab(self._ai_tab(), "Identity")
         self.tabs.addTab(self._camera_tab(), "Camera")
         self.tabs.addTab(self._estimator_tab(), "Estimator & Controller")
         self.tabs.addTab(self._env_tab(), "Environment")
         self.tabs.addTab(self._disturb_tab(), "Disturbances")
-        self.tabs.addTab(self._ai_tab(), "AI / Identity")
         self.tabs.addTab(self._input_tab(), "Input/Logging")
 
         btns = QHBoxLayout()
@@ -294,6 +296,20 @@ class ControlDeck(QDialog):
             self.sig_enabled_check.setChecked(bool(sig.get("enabled", True)))
             self.candidate_model_edit.setText(str(ai.get("candidate_model_path","")))
             self.identity_model_edit.setText(str(ai.get("identity_model_path","")))
+            # Search
+            trk = self.cfg.get("tracker", {})
+            self.search_local_spin.setValue(int(trk.get("lost_timeout_frames",15)//5) if trk.get("lost_timeout_frames",15)>=5 else 3)
+            self.search_spiral_spin.setValue(int(trk.get("reacq_timeout_frames",30)))
+            self.search_roi_spin.setValue(int(self.cfg.get("search",{}).get("roi_size",160)) if self.cfg.get("search") else 160)
+            self.search_ai_check.setChecked(bool(ai.get("search_ranking", False)))
+            # Detection
+            det = self.cfg.get("detector", {})
+            self.det_thr_spin.setValue(float(det.get("threshold_k",3.0)))
+            self.det_min_spin.setValue(int(det.get("min_area",8)))
+            self.det_max_spin.setValue(int(det.get("max_area",900)))
+            self.det_blur_spin.setValue(int(det.get("blur_ksize",3)))
+            self.det_conf_spin.setValue(float(ai.get("detection_threshold",0.45)) if ai else 0.45)
+            self.det_model_edit.setText(str(ai.get("candidate_model_path","")) if ai else "")
         except Exception as e:
             print(f"[ControlDeck] _refresh_all_fields failed: {e}")
 
@@ -608,6 +624,53 @@ class ControlDeck(QDialog):
         f.addRow(QLabel("Max Jitter ±20 px/frame → Camera tab")); f.addRow(QLabel("Platform ±20 px/f → Environment tab (Linear def, +Circular/Random/Spiral/Figure-8)"))
         return w
 
+    def _search_tab(self):
+        w = QWidget(); f = QFormLayout(w)
+        trk = self.cfg.get("tracker", {})
+        ai = self.cfg.get("ai", {})
+        self.search_local_spin = QSpinBox(); self.search_local_spin.setRange(1,10); self.search_local_spin.setValue(int(trk.get("lost_timeout_frames",15)//5) if trk.get("lost_timeout_frames",15)>=5 else 3)
+        self.search_spiral_spin = QSpinBox(); self.search_spiral_spin.setRange(10,60); self.search_spiral_spin.setValue(int(trk.get("reacq_timeout_frames",30)))
+        self.search_roi_spin = QSpinBox(); self.search_roi_spin.setRange(80,400); self.search_roi_spin.setValue(int(self.cfg.get("search",{}).get("roi_size",160)) if self.cfg.get("search") else 160)
+        self.search_ai_check = QCheckBox("AI region ranking (predicted pos/velocity, decoy memory, disturbances)")
+        self.search_ai_check.setChecked(bool(ai.get("search_ranking", False)))
+        f.addRow(QLabel("Stage A — Local recovery: search around EKF prediction + velocity (short loss)"))
+        f.addRow("Local timeout (frames)", self.search_local_spin)
+        f.addRow(QLabel("Stage B — Expanding spiral, Stage C — Global raster (long loss)"))
+        f.addRow("Re-acq timeout (frames)", self.search_spiral_spin)
+        f.addRow("ROI size (px)", self.search_roi_spin)
+        f.addRow(self.search_ai_check)
+        f.addRow(QLabel("Deterministic spiral/raster is baseline; AI ranking prioritizes predicted pos/velocity, decoy memory, disturbances (Plan §4). Must respect speed/FOV/timeouts."))
+        # warning if exceeds reacq limit
+        self.search_warning = QLabel("⚠ Re-acq >30 frames may exceed 1 s limit at 30 Hz")
+        self.search_warning.setStyleSheet("color:#B45309; font-size:10px;")
+        self.search_warning.hide()
+        f.addRow(self.search_warning)
+        def _check_reacq():
+            self.search_warning.setVisible(int(self.search_spiral_spin.value()) > 30)
+        self.search_spiral_spin.valueChanged.connect(lambda _: _check_reacq())
+        _check_reacq()
+        return w
+
+    def _detection_tab(self):
+        w = QWidget(); f = QFormLayout(w)
+        det = self.cfg.get("detector", {})
+        ai = self.cfg.get("ai", {})
+        self.det_thr_spin = QDoubleSpinBox(); self.det_thr_spin.setRange(1.5,5.0); self.det_thr_spin.setSingleStep(0.5); self.det_thr_spin.setValue(float(det.get("threshold_k",3.0)))
+        self.det_min_spin = QSpinBox(); self.det_min_spin.setRange(2,50); self.det_min_spin.setValue(int(det.get("min_area",8)))
+        self.det_max_spin = QSpinBox(); self.det_max_spin.setRange(100,2000); self.det_max_spin.setValue(int(det.get("max_area",900)))
+        self.det_blur_spin = QSpinBox(); self.det_blur_spin.setRange(1,7); self.det_blur_spin.setValue(int(det.get("blur_ksize",3)))
+        self.det_conf_spin = QDoubleSpinBox(); self.det_conf_spin.setRange(0.3,0.95); self.det_conf_spin.setSingleStep(0.05); self.det_conf_spin.setValue(float(ai.get("detection_threshold",0.45)) if ai else 0.45)
+        f.addRow("Threshold k (bg + k*σ)", self.det_thr_spin)
+        f.addRow("Min blob area", self.det_min_spin)
+        f.addRow("Max blob area", self.det_max_spin)
+        f.addRow("Blur ksize", self.det_blur_spin)
+        f.addRow("AI detection thresh", self.det_conf_spin)
+        f.addRow(QLabel("Adaptive threshold → morphology → CC → Candidate (centroid/bbox/area/aspect/brightness/contrast/compactness/dist). AI MobileNet classifies patch 64×64 + 9 numeric feats → BEACON/DECOY/NOISE/UNKNOWN (Plan §5)."))
+        self.det_model_edit = QLineEdit(str(ai.get("candidate_model_path","")) if ai else "")
+        self.det_model_edit.setPlaceholderText("models/candidate_classifier/best.onnx (empty=heuristic)")
+        f.addRow("AI detector model", self.det_model_edit)
+        return w
+
     def _ai_tab(self):
         w = QWidget(); f = QFormLayout(w)
         ai = self.cfg.get("ai", {})
@@ -626,7 +689,7 @@ class ControlDeck(QDialog):
         f.addRow("Primary threshold", self.primary_thr_spin)
         f.addRow("Decoy threshold", self.decoy_thr_spin)
         f.addRow("Confirmation frames", self.confirm_spin)
-        f.addRow(QLabel("Need N consecutive frames above threshold before PRIMARY/DECOY_CONFIRMED (Plan §6)."))
+        f.addRow(QLabel("Need N consecutive frames above threshold before PRIMARY/DECOY_CONFIRMED (Plan §6). Higher reduces false locks but increases acquisition."))
 
         # Signatures
         self.blink_edit = QLineEdit(str(sig.get("blink_pattern", "10110010")))
@@ -639,7 +702,15 @@ class ControlDeck(QDialog):
         f.addRow("Modulation freq (Hz)", self.freq_spin)
         f.addRow("Freq tolerance (±)", self.freq_tol_spin)
         f.addRow(self.sig_enabled_check)
-        f.addRow(QLabel("Primary must have blink/freq that decoys don't share. Brightness alone never confirms (Plan §3)."))
+        f.addRow(QLabel("Primary must have blink/freq that decoys don't share. Brightness alone never confirms (Plan §3). Spectral/challenge-response optional hooks."))
+
+        # Weights
+        wts = ai.get("weights", {})
+        self.w_app_spin = QDoubleSpinBox(); self.w_app_spin.setRange(0,1); self.w_app_spin.setSingleStep(0.05); self.w_app_spin.setValue(float(wts.get("appearance",0.20)))
+        self.w_sig_spin = QDoubleSpinBox(); self.w_sig_spin.setRange(0,1); self.w_sig_spin.setSingleStep(0.05); self.w_sig_spin.setValue(float(wts.get("signature",0.25)))
+        f.addRow("Weight appearance", self.w_app_spin)
+        f.addRow("Weight signature", self.w_sig_spin)
+        f.addRow(QLabel("IdentityScore = 0.20*appearance+0.20*motion+0.20*temporal+0.25*signature+0.15*estimator (Plan §6)."))
 
         # Info: model paths
         self.candidate_model_edit = QLineEdit(str(ai.get("candidate_model_path","")))
@@ -780,6 +851,27 @@ class ControlDeck(QDialog):
         c["noise"]["gaussian_enabled"] = bool(self.gauss_check.isChecked())
         c["noise"]["salt_pepper_enabled"] = bool(self.spp_check.isChecked())
         c["noise"]["poisson"] = bool(self.poisson_check.isChecked())
+        # search
+        c["tracker"]["lost_timeout_frames"] = int(self.search_local_spin.value()) * 5
+        c["tracker"]["reacq_timeout_frames"] = int(self.search_spiral_spin.value())
+        if "search" not in c:
+            c["search"] = {}
+        c["search"]["roi_size"] = int(self.search_roi_spin.value())
+        if "ai" not in c:
+            c["ai"] = {}
+        c["ai"]["search_ranking"] = bool(self.search_ai_check.isChecked())
+        # detection
+        if "detector" not in c:
+            c["detector"] = {}
+        c["detector"]["threshold_k"] = float(self.det_thr_spin.value())
+        c["detector"]["min_area"] = int(self.det_min_spin.value())
+        c["detector"]["max_area"] = int(self.det_max_spin.value())
+        c["detector"]["blur_ksize"] = int(self.det_blur_spin.value())
+        c["ai"]["detection_threshold"] = float(self.det_conf_spin.value())
+        # if detection model path set via detection tab, prefer it; else keep AI tab path
+        det_model = self.det_model_edit.text().strip()
+        if det_model:
+            c["ai"]["candidate_model_path"] = det_model
         # input/exp + video centre calibration (for mp4 where image centre may be offset)
         c["experiment"]["seed"] = int(self.seed_spin.value())
         c["experiment"]["duration_s"] = float(self.duration_spin.value())
@@ -804,6 +896,14 @@ class ControlDeck(QDialog):
         c["ai"]["signatures"]["enabled"] = bool(self.sig_enabled_check.isChecked())
         c["ai"]["candidate_model_path"] = self.candidate_model_edit.text().strip()
         c["ai"]["identity_model_path"] = self.identity_model_edit.text().strip()
+        if "weights" not in c["ai"]:
+            c["ai"]["weights"] = {}
+        c["ai"]["weights"]["appearance"] = float(self.w_app_spin.value())
+        c["ai"]["weights"]["signature"] = float(self.w_sig_spin.value())
+        # keep other weights default
+        c["ai"]["weights"].setdefault("motion", 0.20)
+        c["ai"]["weights"].setdefault("temporal", 0.20)
+        c["ai"]["weights"].setdefault("estimator", 0.15)
         # mirror to primary_target for World blink simulation
         if "primary_target" not in c:
             c["primary_target"] = {}

@@ -55,22 +55,28 @@ class MainWindow(QMainWindow):
         top_lay.setContentsMargins(12, 8, 12, 8)
         top_lay.setSpacing(10)
 
-        # Branding + seed/FPS sections removed per request — kept hidden for logic only
+        # Branding + seed/FPS — required per Plan §16.2 (always display)
         self.lbl_mark = QLabel("FSOC")
-        self.lbl_mark.hide()
-        self.lbl_title = QLabel("Virtual Camera Tracker  ·  Coarse PAT")
-        self.lbl_title.hide()
-        sep = QFrame()
-        sep.hide()
-        self.lbl_sub = QLabel("Synthetic scene  •  30 Hz  •  EKF-IMM-PID")
-        self.lbl_sub.hide()
-        self.lbl_seed_top = QLabel(f"seed {self.cfg['experiment']['seed']}")
-        self.lbl_seed_top.hide()
-        self.lbl_fps_top = QLabel("— FPS")
-        self.lbl_fps_top.hide()
+        self.lbl_mark.setStyleSheet(f"color:{COLORS['text']}; font-size:13px; font-weight:800; letter-spacing:0.5px;")
+        self.lbl_title = QLabel("Virtual Camera Tracker  ·  Coarse PAT  ·  v1.0.0")
+        self.lbl_title.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px;")
+        self.lbl_sub = QLabel(f"Synthetic  •  seed {self.cfg['experiment']['seed']}  •  30 Hz  •  EKF-IMM-PID")
+        self.lbl_sub.setStyleSheet(f"color:{COLORS['muted']}; font-size:10px;")
+        top_lay.addWidget(self.lbl_mark)
+        top_lay.addWidget(self.lbl_title)
+        top_lay.addWidget(self.lbl_sub)
         top_lay.addStretch()
+        self.lbl_seed_top = QLabel(f"seed {self.cfg['experiment']['seed']}")
+        self.lbl_seed_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['text']}; font-size:10px; padding:4px 8px; border-radius:4px;")
+        top_lay.addWidget(self.lbl_seed_top)
+        self.lbl_fps_top = QLabel("— FPS")
+        self.lbl_fps_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['muted']}; font-size:10px; padding:4px 8px; border-radius:4px;")
+        top_lay.addWidget(self.lbl_fps_top)
+        self.lbl_primary_top = QLabel("AI 0%")
+        self.lbl_primary_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['muted']}; font-size:10px; padding:4px 8px; border-radius:4px;")
+        top_lay.addWidget(self.lbl_primary_top)
 
-        # mode / state kept (seed/FPS branding removed)
+        # mode / state
         self.lbl_mode = QLabel("SYNTHETIC")
         self.lbl_mode.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['accent']}; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
         top_lay.addWidget(self.lbl_mode)
@@ -344,7 +350,8 @@ class MainWindow(QMainWindow):
             cam_type=self.cfg["camera"].get("type","monochrome"), cam_res=f"{self.cfg['camera']['resolution'][0]}×{self.cfg['camera']['resolution'][1]}", cam_fov=f"{self.cfg['camera']['fov_deg'][0]:.1f}×{self.cfg['camera']['fov_deg'][1]:.1f}", cam_fps=int(self.cfg["camera"].get("fps",30)), cam_init=self.cfg["camera"].get("initial_position","centre"),
             tgt_type=self.cfg["target"].get("type","beacon_spot"), tgt_count=int(self.cfg["target"].get("count",1)), tgt_shape=self.cfg["target"].get("shape","square"), tgt_init=self.cfg["target"].get("initial_mode","random"),
             max_pan=float(self.cfg["camera"].get("max_pan_speed",5.0)), max_tilt=float(self.cfg["camera"].get("max_tilt_speed",5.0)), update_hz=int(self.cfg["camera"].get("update_interval_hz",30)),
-            atmo_strength=float(self.cfg["atmosphere"].get("strength",0.0)), gauss_std=float(self.cfg["noise"].get("gaussian_std",0.0)), spp_prob=float(self.cfg["noise"].get("salt_pepper_prob",0.0)), poisson_enabled=bool(self.cfg["noise"].get("poisson", False)), platform_speed=float(self.cfg["platform"].get("speed_px_per_frame",0.0))
+            atmo_strength=float(self.cfg["atmosphere"].get("strength",0.0)), gauss_std=float(self.cfg["noise"].get("gaussian_std",0.0)), spp_prob=float(self.cfg["noise"].get("salt_pepper_prob",0.0)), poisson_enabled=bool(self.cfg["noise"].get("poisson", False)), platform_speed=float(self.cfg["platform"].get("speed_px_per_frame",0.0)),
+            ai_enabled=bool(self.cfg.get("ai",{}).get("enabled", False)), ai_state="IDLE", prim_conf=0.0, sig_score=0.0, decoys_rej=0, unknown_cnt=0, id_switches=0, t_ident=None, model_ver="—"
         )
         self.statusBar().showMessage("Reset  —  ready")
 
@@ -601,6 +608,19 @@ class MainWindow(QMainWindow):
         self.lbl_state_top.setText(state)
         self.lbl_state_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {col}; color:{col}; font-size:10px; font-weight:800; letter-spacing:0.6px; padding:4px 8px; border-radius:4px;")
         self.lbl_fps_top.setText(f"{self.fps_smooth:.1f} FPS")
+        try:
+            self.lbl_seed_top.setText(f"seed {self.cfg['experiment']['seed']}")
+            mode_str = self.cfg["experiment"]["input_mode"]
+            self.lbl_sub.setText(f"{mode_str}  •  {self.cfg['target']['trajectory']}  •  {int(self.cfg['camera']['fps'])} Hz  •  EKF-IMM-PID" + ("  •  AI ON" if ai_enabled else ""))
+            if ai_enabled:
+                pc = ai_primary_ident.primary_probability if ai_primary_ident else 0.0
+                self.lbl_primary_top.setText(f"AI {pc*100:.0f}%" if pc>0 else "AI —")
+                self.lbl_primary_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['accent'] if pc>=0.85 else COLORS['border']}; color:{COLORS['accent'] if pc>=0.85 else COLORS['muted']}; font-size:10px; padding:4px 8px; border-radius:4px;")
+            else:
+                self.lbl_primary_top.setText("AI OFF")
+                self.lbl_primary_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['muted']}; font-size:10px; padding:4px 8px; border-radius:4px;")
+        except Exception:
+            pass
 
         # info strip removed per request (centroid/GT/err/αβ/conf/pan/tilt section)
 
@@ -632,6 +652,45 @@ class MainWindow(QMainWindow):
             pan_ang = float(self.source.camera.pan)
             tilt_ang = float(self.source.camera.tilt)
 
+        # AI identity for dashboard (Plan §16.6)
+        ai_state_str = "—"
+        prim_conf = 0.0
+        sig_sc = 0.0
+        decoys_rej = 0
+        unknown_cnt = 0
+        id_switches = 0
+        t_ident = None
+        model_ver = "heuristic" if ai_enabled else "—"
+        try:
+            if ai_enabled and getattr(self, '_ai_results', None):
+                # primary
+                if ai_primary_ident is not None:
+                    ai_state_str = ai_primary_ident.identity_state.value
+                    prim_conf = float(ai_primary_ident.primary_probability)
+                    sig_sc = float(ai_primary_ident.evidence.optical_signature_score)
+                    model_ver = ai_primary_ident.model_version
+                else:
+                    # best available
+                    best = max(self._ai_results, key=lambda x: x[1].primary_probability) if self._ai_results else None
+                    if best:
+                        ai_state_str = best[1].identity_state.value
+                        prim_conf = float(best[1].primary_probability)
+                        sig_sc = float(best[1].evidence.optical_signature_score)
+                        model_ver = best[1].model_version
+                # counts
+                decoys_rej = sum(1 for _, ident in self._ai_results if ident.identity_state.value == "DECOY_CONFIRMED")
+                unknown_cnt = sum(1 for _, ident in self._ai_results if ident.identity_state.value in ("UNKNOWN","IDENTITY_CHECKING"))
+                # switches: count per track history
+                id_switches = sum(getattr(tr, 'confirmed_frames', 0) for tr in self._ai_tracks.values()) if hasattr(self, '_ai_tracks') else 0
+                # time to identify: first primary frame / fps
+                if ai_primary_ident is not None:
+                    # approximate as frames since track creation until confirmed / fps
+                    tr = self._ai_tracks.get(ai_primary_ident.track_id) if hasattr(self, '_ai_tracks') else None
+                    if tr and tr.age:
+                        t_ident = (tr.age - 5) / max(float(self.cfg["camera"]["fps"]), 1) if tr.age >=5 else None
+        except Exception:
+            pass
+
         self.dashboard.update_metrics(
             state=state, confidence=detection.confidence,
             raw_centroid=raw_cent, fused_pos=fused,
@@ -657,7 +716,8 @@ class MainWindow(QMainWindow):
             cam_type=self.cfg["camera"].get("type","monochrome"), cam_res=f"{self.cfg['camera']['resolution'][0]}×{self.cfg['camera']['resolution'][1]}", cam_fov=f"{self.cfg['camera']['fov_deg'][0]:.1f}×{self.cfg['camera']['fov_deg'][1]:.1f}", cam_fps=int(self.cfg["camera"].get("fps",30)), cam_init=self.cfg["camera"].get("initial_position","centre"),
             tgt_type=self.cfg["target"].get("type","beacon_spot"), tgt_count=int(self.cfg["target"].get("count",1)), tgt_shape=self.cfg["target"].get("shape","square"), tgt_init=self.cfg["target"].get("initial_mode","random"),
             max_pan=float(self.cfg["camera"].get("max_pan_speed",5.0)), max_tilt=float(self.cfg["camera"].get("max_tilt_speed",5.0)), update_hz=int(self.cfg["camera"].get("update_interval_hz",30)),
-            atmo_strength=float(self.cfg["atmosphere"].get("strength",0.0)), gauss_std=float(self.cfg["noise"].get("gaussian_std",0.0)), spp_prob=float(self.cfg["noise"].get("salt_pepper_prob",0.0)), poisson_enabled=bool(self.cfg["noise"].get("poisson", False)), platform_speed=float(self.cfg["platform"].get("speed_px_per_frame",0.0))
+            atmo_strength=float(self.cfg["atmosphere"].get("strength",0.0)), gauss_std=float(self.cfg["noise"].get("gaussian_std",0.0)), spp_prob=float(self.cfg["noise"].get("salt_pepper_prob",0.0)), poisson_enabled=bool(self.cfg["noise"].get("poisson", False)), platform_speed=float(self.cfg["platform"].get("speed_px_per_frame",0.0)),
+            ai_enabled=ai_enabled, ai_state=ai_state_str, prim_conf=prim_conf, sig_score=sig_sc, decoys_rej=decoys_rej, unknown_cnt=unknown_cnt, id_switches=id_switches, t_ident=t_ident, model_ver=model_ver
         )
         self.last_frame = frame
         self.last_detection = detection
