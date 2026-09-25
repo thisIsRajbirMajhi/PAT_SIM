@@ -1,0 +1,46 @@
+# Training pipeline configuration — Plan §9.2 / Prompt Phase 7
+
+training:
+  data_root: "data/datasets"
+  generated_root: "data/generated_scenarios"
+  candidate_out: "models/candidate_classifier"
+  identity_out: "models/identity_classifier"
+  metadata_dir: "models/metadata"
+
+  # reproducibility
+  seed: 42
+  deterministic: true
+
+  # splits by scenario seed (no frame leakage)
+  split:
+    train_seeds: [1, 70]
+    val_seeds: [71, 85]
+    test_seeds: [86, 100]
+
+  candidate:
+    model: "mobilenet_v3_small"
+    batch_size: 64
+    epochs: 30
+    lr: 0.001
+    weight_decay: 0.0001
+    loss: "focal"                      # focal | weighted_ce
+    focal_gamma: 2.0
+    augmentation: true
+    early_stop_patience: 6
+    val_metric: "f1_beacon"            # do not select on accuracy alone
+
+  identity:
+    hidden: 64
+    seq_len: 25
+    batch_size: 32
+    epochs: 40
+    lr: 0.001
+    loss: "weighted_ce"
+    freeze_cnn: true                   # first stage; then fine-tune with lower lr
+    fine_tune_lr: 0.0001
+    fine_tune_epochs: 10
+    val_metric: "primary_f1"
+
+  export:
+    onnx_opset: 17
+    tflite_quantize: false

@@ -1,0 +1,22 @@
+# Calibrated thresholds — produced by scripts/calibrate_thresholds.py
+# Do not edit by hand; the script overwrites this file from validation metrics.
+# Defaults match Plan §6 and are safe to run with heuristic fallback.
+
+thresholds:
+  primary_threshold: 0.85
+  decoy_threshold: 0.85
+  confirmation_frames: 5
+  unknown_low: 0.45
+  unknown_high: 0.85
+  temperature: 1.0                    # for temperature scaling (calibration.py)
+  calibrated_at: null
+  val_ece: null
+  val_primary_f1: null
+  val_false_lock_rate: null
+
+weights:
+  appearance: 0.20
+  motion: 0.20
+  temporal: 0.20
+  signature: 0.25
+  estimator: 0.15

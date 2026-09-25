@@ -1,0 +1,24 @@
+# Optical identity signatures — Plan §8 / Prompt Phase 6
+# At least one signature should differ between primary and decoys.
+
+signatures:
+  primary:
+    blink_pattern: "10110010"
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05
+    shape: "square"
+    size_range_px: [5, 20]
+    spectral_band: null                # e.g. "850nm" if hardware supports it
+    challenge_response: null           # strongest — enable when optics support it
+
+  decoy_examples:
+    - name: "reflection"
+      blink_pattern: "11100011"
+      modulation_freq_hz: 8.0
+      shape: "irregular"
+    - name: "noise_blob"
+      blink_pattern: null
+      shape: "fragmented"
+    - name: "false_beacon"
+      blink_pattern: "10101010"       # partial / incorrect
+      modulation_freq_hz: 12.0        # correct freq but wrong pattern

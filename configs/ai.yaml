@@ -1,0 +1,36 @@
+# AI subsystem configuration — Phase 1 (Prompt §5 / Plan §9.1)
+# All fields have safe defaults so the system runs with ai.enabled == false.
+
+ai:
+  enabled: false                       # master kill-switch — must be true to activate MobileNet+GRU
+  patch_size: 64                       # candidate patch size (px)
+  sequence_length: 25                  # GRU history 20-30
+  gru_hidden: 64                       # 64 or 128
+  inference_timeout_ms: 40             # hard timeout per classifier (fallback to heuristic)
+  fallback_on_failure: true            # increase uncertainty + suppress PID on AI error
+
+  candidate_model_path: ""             # e.g. models/candidate_classifier/best.onnx  (empty = heuristic)
+  identity_model_path: ""              # e.g. models/identity_classifier/best.onnx   (empty = heuristic voter)
+
+  thresholds:
+    primary_threshold: 0.85            # Plan §6 — tuned via calibrate_thresholds.py
+    decoy_threshold: 0.85
+    confirmation_frames: 5             # consecutive frames above threshold before CONFIRMED
+    unknown_low: 0.45
+    unknown_high: 0.85
+
+  signatures:
+    enabled: true
+    blink_pattern: "10110010"          # repeats per frame
+    blink_enabled: true
+    modulation_freq_hz: 12.0
+    freq_tolerance: 0.05               # ±5%
+    expected_shape: "square"
+    size_range_px: [5, 20]
+    max_speed_px_per_frame: 20.0
+    persistence_frames: 5
+
+  export:
+    format: "onnx"                     # onnx | tflite
+    quantize_int8: false               # only after false-lock check
+    profile_fps: true
