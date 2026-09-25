@@ -11,8 +11,8 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     assert 30 <= cfg["camera"]["fps"] <= 60, "Camera update Rate 30-60 Hz (min 30, spec §5)"
     assert cfg["camera"]["initial_position"] in ("centre", "center", "user-defined", "user_defined"), "Initial Camera Position"
     # allow pan/tilt within world
-    assert 5 <= cfg["camera"]["max_pan_speed"] <= 15 or 1 <= cfg["camera"]["max_pan_speed"] <= 15, "Max Pan 5-10 °/s (UI 1-15 for tuning)"
-    assert 5 <= cfg["camera"]["max_tilt_speed"] <= 15 or 1 <= cfg["camera"]["max_tilt_speed"] <= 15, "Max Tilt"
+    assert 1 <= cfg["camera"]["max_pan_speed"] <= 15, "Max Pan 1-15 °/s (nominal 5-10)"
+    assert 1 <= cfg["camera"]["max_tilt_speed"] <= 15, "Max Tilt 1-15 °/s (nominal 5-10)"
     # Update Interval derived from fps, but allow explicit
     assert 20 <= cfg["camera"].get("update_interval_hz", cfg["camera"]["fps"]) <= 60, "Update Interval ≥20 Hz"
 
@@ -51,6 +51,11 @@ def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
             assert 0.5 <= float(thr.get("primary_threshold", 0.85)) <= 0.99
             assert 0.5 <= float(thr.get("decoy_threshold", 0.85)) <= 0.99
             assert 1 <= int(thr.get("confirmation_frames", 5)) <= 15
+            assert 0.0 <= float(thr.get("unknown_low", 0.45)) < float(thr.get("unknown_high", 0.85)) <= 1.0
+        w = ai.get("weights", None)
+        if w:
+            s = float(w.get("appearance", 0.20)) + float(w.get("motion", 0.20)) + float(w.get("temporal", 0.20)) + float(w.get("signature", 0.25)) + float(w.get("estimator", 0.15))
+            assert abs(s - 1.0) < 1e-6, f"ai.weights must sum to 1.0 (got {s})"
 
     # environment brightness etc already validated elsewhere
     return cfg

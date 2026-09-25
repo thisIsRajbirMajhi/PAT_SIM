@@ -61,8 +61,9 @@ class CameraController:
             self.prev_tilt_rate = float(tilt_rate)
             return ControlCommand(pan_rate=float(pan_rate), tilt_rate=float(tilt_rate), saturated=False, search_mode=True)
 
-        if state == TrackingState.TEMP_LOST:
-            # reduced aggressiveness, use velocity feedforward
+        if state == TrackingState.TEMP_LOST or state in (TrackingState.CANDIDATE, TrackingState.ACQUIRING):
+            # reduced aggressiveness for unconfirmed candidates (Plan §12:
+            # only PRIMARY_CONFIRMED drives full PID; CHECKING/UNKNOWN use bounded motion)
             err_pan, err_tilt = estimate.pos_angle
             pan_unsat = self.pan_pid.step(err_pan, dt) * 0.55
             tilt_unsat = self.tilt_pid.step(err_tilt, dt) * 0.55
@@ -86,11 +87,11 @@ class CameraController:
         if saturated:
             self.pan_pid.back_calculate_anti_windup(pan_unsat, pan, dt)
             self.tilt_pid.back_calculate_anti_windup(tilt_unsat, tilt, dt)
-        # §6 integral cautiously: freeze/decay when innovation high (low confidence) or TEMP_LOST
+        # integral cautiously: freeze/decay when innovation high (low confidence) or TEMP_LOST
         if estimate.innovation > 18:
             self.pan_pid.decay_integral(0.92)
             self.tilt_pid.decay_integral(0.92)
-        if state == TrackingState.TEMP_LOST:
+        if state in (TrackingState.TEMP_LOST, TrackingState.CANDIDATE, TrackingState.ACQUIRING):
             self.pan_pid.decay_integral(0.96)
             self.tilt_pid.decay_integral(0.96)
 

@@ -36,8 +36,8 @@ class TracksView(QWidget):
         title.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px; font-weight:700; letter-spacing:0.7px;")
         lay.addWidget(title)
 
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(["ID", "Class", "Primary %", "Signature", "State", "Age", "Missed"])
+        self.table = QTableWidget(0, 11)
+        self.table.setHorizontalHeaderLabels(["ID", "Class", "Primary %", "Decoy %", "Signature", "Motion", "State", "Age", "Missed", "Last seen", "Dist px"])
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.Stretch)
         hdr.setSectionResizeMode(0, QHeaderView.Fixed)
@@ -45,9 +45,14 @@ class TracksView(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setWordWrap(False)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.table.setStyleSheet(f"""
-            QTableWidget {{ background:{COLORS['surface']}; border:1px solid {COLORS['border']}; border-radius:6px; font-size:11px; }}
+            QTableWidget {{ background:{COLORS['surface']}; alternate-background-color:{COLORS['faint']};
+                border:1px solid {COLORS['border']}; border-radius:6px; font-size:11px; }}
             QHeaderView::section {{ background:{COLORS['faint']}; color:{COLORS['muted']}; font-size:10px; font-weight:700; padding:4px; border:none; border-bottom:1px solid {COLORS['border']}; }}
+            QTableWidget::item:selected {{ background:#DBEAFE; color:{COLORS['text']}; }}
         """)
         self.table.setMinimumHeight(140)
         self.table.setMaximumHeight(180)
@@ -99,27 +104,45 @@ class TracksView(QWidget):
             it = QTableWidgetItem(f"{prim*100:.0f}%")
             it.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 2, it)
+            # Decoy %
+            dec = ident.decoy_probability if ident else 0.0
+            dec_item = QTableWidgetItem(f"{dec*100:.0f}%" if ident else "—")
+            dec_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 3, dec_item)
             # Signature
             sig = getattr(getattr(ident, 'evidence', None), 'optical_signature_score', 0.0) if ident else 0.0
             sig_item = QTableWidgetItem(f"{sig*100:.0f}%" if ident else "—")
             sig_item.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, 3, sig_item)
+            self.table.setItem(row, 4, sig_item)
+            # Motion consistency
+            mot = getattr(getattr(ident, 'evidence', None), 'motion_score', 0.0) if ident else 0.0
+            mot_item = QTableWidgetItem(f"{mot*100:.0f}%" if ident else "—")
+            mot_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 5, mot_item)
             # State
             state_item = QTableWidgetItem(cls_str)
             col = STATE_COLORS_AI.get(cls_str, COLORS['muted'])
             state_item.setForeground(QBrush(QColor(col)))
-            self.table.setItem(row, 4, state_item)
+            self.table.setItem(row, 6, state_item)
             # Age
             tr = ai_tracks_dict.get(cand.candidate_id) if ai_tracks_dict else None
             age = getattr(tr, 'age', 0) if tr else 0
-            self.table.setItem(row, 5, QTableWidgetItem(f"{age}"))
+            self.table.setItem(row, 7, QTableWidgetItem(f"{age}"))
             # Missed
             missed = getattr(tr, 'missed_frames', 0) if tr else 0
-            self.table.setItem(row, 6, QTableWidgetItem(f"{missed}"))
+            self.table.setItem(row, 8, QTableWidgetItem(f"{missed}"))
+            # Last seen frame
+            last_seen = getattr(tr, 'last_seen_frame', -1) if tr else -1
+            self.table.setItem(row, 9, QTableWidgetItem(f"{last_seen}"))
+            # Distance from prediction
+            dist = getattr(cand, 'distance_from_prediction', 0.0) or 0.0
+            dist_item = QTableWidgetItem(f"{dist:.0f}")
+            dist_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(row, 10, dist_item)
             # row background tint per state
             row_col = QColor(col)
             row_col.setAlpha(18)
-            for col_idx in range(7):
+            for col_idx in range(11):
                 it2 = self.table.item(row, col_idx)
                 if it2:
                     it2.setBackground(QBrush(row_col))
@@ -163,6 +186,8 @@ class TracksView(QWidget):
             lbl.setText("—")
 
     def clear(self):
+        self._tracks = []
+        self._selected_id = None
         self.table.setRowCount(0)
         for lbl in self.evidence_labels:
             lbl.setText("—")

@@ -111,10 +111,10 @@ class SimpleEKF:
         except:
             invS = np.linalg.pinv(S)
         nis = float(y @ invS @ y)
-        # outlier gate: if huge, reject
-        gate = float(self.cfg_gate_sigma()**2 * 2) if hasattr(self, 'cfg_gate_sigma') else 36.0
-        # we store gate externally; for now threshold 25 (5 sigma)
-        if nis > 28:
+        # outlier gate: normalized innovation squared; 28 ≈ strict chi2 gate
+        # for 2-dof pixel measurement (kept in sync with app-level gating).
+        gate = 28.0
+        if nis > gate:
             # reject measurement, increase covariance slightly
             self.P += np.eye(6)*0.8
             return self.x.copy(), nis

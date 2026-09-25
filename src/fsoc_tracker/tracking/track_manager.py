@@ -28,6 +28,7 @@ class TrackManager:
         self.gate_px = float(cfg.get("tracker", {}).get("gate_sigma", 5.0)) * 10.0  # ~50px gate
         self.tracks: Dict[int, TrackState] = {}
         self._next_id = 1
+        self.last_pruned: List[int] = []
         # decoy memory: track_id → frames since rejection
         self._decoy_memory: Dict[int, int] = {}
         self._rejected_positions: List[Tuple[float, float]] = []
@@ -35,6 +36,7 @@ class TrackManager:
     def reset(self):
         self.tracks.clear()
         self._next_id = 1
+        self.last_pruned = []
         self._decoy_memory.clear()
         self._rejected_positions.clear()
 
@@ -73,10 +75,13 @@ class TrackManager:
                     best_dist = dist
                     best_tid = tid
             if best_tid is not None:
-                # check decoy memory: don't re-associate to recently rejected decoy within small radius
+                # decoy memory: a recently rejected decoy track must not re-absorb
+                # measurements — consume the candidate without updating the track
+                # so the rejected track misses out and is eventually pruned while
+                # _rejected_positions suppresses immediate re-creation nearby.
                 if self.tracks[best_tid].is_rejected_decoy and best_dist < 40:
-                    # keep as rejected; don't update with this candidate if far?
-                    pass
+                    # consume the candidate without updating the rejected track
+                    continue
                 # bind candidate to persistent track id for AI pipeline lookup
                 c.candidate_id = best_tid
                 self._update_track(best_tid, c, frame_id, innovation, imm_probs)
@@ -96,6 +101,7 @@ class TrackManager:
                 assigned_candidates.add(c.candidate_id)
 
         # increment missed for unassigned tracks
+        self.last_pruned = []
         for tid in list(self.tracks.keys()):
             if tid not in assigned_tracks:
                 self.tracks[tid].missed_frames += 1
@@ -107,6 +113,7 @@ class TrackManager:
                     self._rejected_positions.append(self.tracks[tid].position_history[-1])
                     if len(self._rejected_positions) > 20:
                         self._rejected_positions.pop(0)
+                self.last_pruned.append(tid)
                 del self.tracks[tid]
 
         return dict(self.tracks)

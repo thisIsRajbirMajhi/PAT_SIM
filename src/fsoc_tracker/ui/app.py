@@ -37,8 +37,9 @@ class MainWindow(QMainWindow):
         self.cfg = load_config()
         self._build_ui()
         self._init_pipeline()
-        # status bar removed per request (entire section hidden)
-        self.statusBar().hide()
+        # Keep the status bar visible so Run/Reset/Export feedback is not
+        # written into an invisible widget.
+        self.statusBar().showMessage("Ready — configure a mode and press Run")
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -72,7 +73,9 @@ class MainWindow(QMainWindow):
         self.lbl_fps_top = QLabel("— FPS")
         self.lbl_fps_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['muted']}; font-size:10px; padding:4px 8px; border-radius:4px;")
         top_lay.addWidget(self.lbl_fps_top)
-        self.lbl_primary_top = QLabel("AI 0%")
+        self.lbl_primary_top = QLabel(
+            "AI —" if bool(self.cfg.get("ai", {}).get("enabled", False)) else "AI OFF"
+        )
         self.lbl_primary_top.setStyleSheet(f"background:{COLORS['faint']}; border:1px solid {COLORS['border']}; color:{COLORS['muted']}; font-size:10px; padding:4px 8px; border-radius:4px;")
         top_lay.addWidget(self.lbl_primary_top)
 
@@ -241,15 +244,15 @@ class MainWindow(QMainWindow):
 
     def _on_config_applied(self, cfg):
         self.cfg = cfg
+        ai_on = bool(cfg.get("ai", {}).get("enabled", False))
         # progressive disclosure: AI tracks visible only when AI ON
         try:
-            ai_on = bool(cfg.get("ai", {}).get("enabled", False))
             self.tracks_view.setVisible(ai_on)
             # resize to reclaim space when AI OFF
             if not ai_on:
                 self.tracks_view.clear()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[UI] Could not update target-track visibility: {exc}")
         self._create_source()
         self.reset_run()
         self.statusBar().showMessage(f"Configuration applied — AI {'ON' if ai_on else 'OFF'} — ready to Run")
@@ -285,7 +288,10 @@ class MainWindow(QMainWindow):
         self.btn_pause.setText("Pause")
         fps = max(1, int(self.cfg["camera"]["fps"]))
         self.timer.start(int(1000 / fps))
-        # status bar hidden per request — no message
+        self.statusBar().showMessage(
+            f"Running — {self.cfg['experiment']['input_mode']} · "
+            f"AI {'ON' if bool(self.cfg.get('ai', {}).get('enabled', False)) else 'OFF'}"
+        )
 
     def toggle_pause(self):
         if not self.running:
@@ -431,6 +437,19 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 ident.evidence.optical_signature_score = float(sig_score)
+                # appearance score from Stage-1 beacon probability (single-frame evidence)
+                try:
+                    ident.evidence.appearance_score = float(max(0.0, min(1.0, c.beacon_probability)))
+                except Exception:
+                    pass
+                # motion/estimator consistency from current innovation (fresh per frame)
+                try:
+                    _nis_now = float(self.tracker.imm.last_nis)
+                except Exception:
+                    _nis_now = 0.0
+                ident.evidence.innovation_sigma = _nis_now
+                ident.evidence.motion_score = 1.0 if _nis_now < 5.0 else (0.5 if _nis_now < 18.0 else 0.2)
+                ident.evidence.estimator_consistency_score = ident.evidence.motion_score
                 if sig_score >= 0.68:
                     ident.evidence.reasons.append("✓ Correct optical signature")
                 elif sig_score <= 0.42:
@@ -438,7 +457,7 @@ class MainWindow(QMainWindow):
                 # motion / stability hints
                 if tr.missed_frames == 0 and len(tr.position_history) >= 3:
                     ident.evidence.reasons.append("✓ Stable centroid")
-                if float(self.tracker.imm.last_nis) < 5.0:
+                if _nis_now < 5.0:
                     ident.evidence.reasons.append("✓ Innovation within gate")
                 else:
                     ident.evidence.reasons.append("✗ High innovation")
@@ -456,6 +475,12 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
             self._ai_results = list(ai_results)
+            # reset identity streaks for pruned tracks (prevents streak-dict leak)
+            try:
+                for _pid in list(getattr(self.track_manager, "last_pruned", [])):
+                    self.identity_sm.reset_track(_pid)
+            except Exception:
+                pass
             # select PRIMARY_CONFIRMED with highest primary_prob (if multiple)
             primary_pair = None
             for c, ident in ai_results:
@@ -465,15 +490,21 @@ class MainWindow(QMainWindow):
             if primary_pair is not None:
                 c_primary, ident_primary = primary_pair
                 ai_primary_ident = ident_primary
-                # innovation gating (Plan §11): large NIS + low identity → reject
-                nis = float(self.tracker.imm.last_nis)
+                # track confirmed frames for dashboard time-to-identify
+                try:
+                    _trp = tracks.get(c_primary.candidate_id)
+                    if _trp is not None:
+                        _trp.confirmed_frames = int(getattr(_trp, "confirmed_frames", 0)) + 1
+                except Exception:
+                    pass
+                detection = Detection(valid=True, centroid_px=c_primary.centroid_px, bbox=c_primary.bbox, confidence=float(ident_primary.measurement_quality), score=float(ident_primary.primary_probability), area=c_primary.area)
+                estimate = self.tracker.step(detection, frame)
+                # innovation gating (Plan §11) on the FRESH nis from this step:
+                # large NIS + low identity → reject
+                nis = float(getattr(estimate, "innovation", 0.0))
                 if nis > 28 and ident_primary.primary_probability < 0.66:
-                    detection = Detection(valid=False)
-                    estimate = self.tracker.step(detection, frame)
                     estimate.tracking_state = TrackingState.REACQUIRING
                 else:
-                    detection = Detection(valid=True, centroid_px=c_primary.centroid_px, bbox=c_primary.bbox, confidence=float(ident_primary.measurement_quality), score=float(ident_primary.primary_probability), area=c_primary.area)
-                    estimate = self.tracker.step(detection, frame)
                     # override single-track state machine to reflect identity (only PRIMARY_CONFIRMED drives LOCKED)
                     estimate.tracking_state = TrackingState.LOCKED
             else:
@@ -566,17 +597,14 @@ class MainWindow(QMainWindow):
         self.cam_view.set_frame(frame.image, detection=detection, estimate=estimate, show_overlays=self.chk_overlays.isChecked(), meta=meta, centre_offset=centre_offset)
 
         world_pos = gt.world_pos if gt and gt.world_pos != (0, 0) else None
-        # debug GT gating: if checkbox unchecked, hide trail in world view (evaluator safety)
-        if not self.chk_debug_gt.isChecked():
-            # keep footprint but hide beacon trail? For true benchmark, hide all.
-            # We still show footprint; beacon is debug-only. So skip world_pos when unchecked in benchmark mode.
-            # For synthetic demo we keep it, but respect checkbox.
-            if self.cfg["experiment"]["input_mode"] == "VIDEO":
-                world_pos = None
-            elif not self.chk_debug_gt.isChecked():
-                # still show for demo, but muted — we keep it visible per spec World FOV requires target trail.
-                # To satisfy "hidden by default", we gate only when seed is random benchmark: we keep visible for now.
-                pass
+        # In external-video/benchmark mode, hide ground truth unless the
+        # operator explicitly enables the debug overlay.  Synthetic mode is a
+        # simulator view, so the world target remains visible for orientation.
+        if (
+            self.cfg["experiment"]["input_mode"] == "VIDEO"
+            and not self.chk_debug_gt.isChecked()
+        ):
+            world_pos = None
         cam_for_world = self.source.camera if isinstance(self.source, SyntheticSource) else None
         if cam_for_world:
             # pass AI tracks for decoy trails in World FOV (Plan §16.4)
@@ -698,7 +726,8 @@ class MainWindow(QMainWindow):
                     # approximate as frames since track creation until confirmed / fps
                     tr = self._ai_tracks.get(ai_primary_ident.track_id) if hasattr(self, '_ai_tracks') else None
                     if tr and tr.age:
-                        t_ident = (tr.age - 5) / max(float(self.cfg["camera"]["fps"]), 1) if tr.age >=5 else None
+                        _cf = int(self.cfg.get("ai", {}).get("thresholds", {}).get("confirmation_frames", 5))
+                        t_ident = (tr.age - _cf) / max(float(self.cfg["camera"]["fps"]), 1) if tr.age >= _cf else None
         except Exception:
             pass
 

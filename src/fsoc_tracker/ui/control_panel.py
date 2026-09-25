@@ -1,15 +1,16 @@
 """Independent parameter panels for the two Control Deck systems.
 
-The simulator has two intentionally different control surfaces:
+Two self-contained editors:
 
-* ``ai`` controls the identity/candidate/decoy pipeline and its own staged
-  copy of the scene parameters;
-* ``deterministic`` controls the original detector -> EKF-IMM -> PID path.
+* ``ai`` — identity/candidate/decoy pipeline plus its own staged copy of the
+  scene parameters;
+* ``deterministic`` — the classical detector -> EKF-IMM -> PID path.
 
-Each :class:`SystemControlPanel` owns a complete configuration copy and its
-widgets.  Switching portions therefore never copies values from one system
-into the other; only the panel that is active when Apply is pressed is sent
-to the simulator.
+Switching portions never copies values between systems; only the panel that
+is active when Apply is pressed is sent to the simulator.
+
+Layout: section cards with clear headings, human-readable parameter names
+with units, and slider + exact-value fields with consistent fonts/spacing.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import copy
 import json
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,6 +31,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -39,6 +41,12 @@ from ..config.presets import PresetInfo
 
 
 PathLike = Tuple[str, ...]
+
+# Consistent type scale for the deck.
+_FONT_LABEL = "font-size:12px; font-weight:600; color:#0F172A;"
+_FONT_HINT = "color:#64748B; font-size:11px;"
+_FONT_SECTION = "font-size:13px; font-weight:800;"
+_FONT_VALUE = "font-size:12px;"
 
 
 def _get_path(data: Mapping[str, Any], path: PathLike, default: Any = None) -> Any:
@@ -119,6 +127,142 @@ def _parse_json(value: str, field_name: str) -> Any:
         raise ValueError(f"{field_name} must contain valid JSON: {exc}") from exc
 
 
+class _IntSlider(QWidget):
+    """Slider + exact spin box for integer parameters (exposes setValue/value)."""
+
+    valueChanged = pyqtSignal(int)
+
+    def __init__(self, value: Any, minimum: int, maximum: int, step: int = 1, unit: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._min = minimum
+        self._max = maximum
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(minimum, maximum)
+        self.slider.setSingleStep(step)
+        self.slider.setPageStep(max(step, (maximum - minimum) // 10 or 1))
+        self.spin = QSpinBox()
+        self.spin.setRange(minimum, maximum)
+        self.spin.setSingleStep(step)
+        self.spin.setFixedWidth(92)
+        if unit:
+            self.spin.setSuffix(f" {unit}")
+        try:
+            ivalue = int(round(float(value if value is not None else 0)))
+        except Exception:
+            ivalue = minimum
+        ivalue = max(minimum, min(maximum, ivalue))
+        self.slider.setValue(ivalue)
+        self.spin.setValue(ivalue)
+        self.slider.valueChanged.connect(self._from_slider)
+        self.spin.valueChanged.connect(self._from_spin)
+        lay.addWidget(self.slider, 1)
+        lay.addWidget(self.spin)
+
+    def _from_slider(self, v: int) -> None:
+        if self.spin.value() != v:
+            self.spin.blockSignals(True)
+            self.spin.setValue(v)
+            self.spin.blockSignals(False)
+        self.valueChanged.emit(v)
+
+    def _from_spin(self, v: int) -> None:
+        if self.slider.value() != v:
+            self.slider.blockSignals(True)
+            self.slider.setValue(v)
+            self.slider.blockSignals(False)
+        self.valueChanged.emit(v)
+
+    def value(self) -> int:
+        return int(self.spin.value())
+
+    def setValue(self, v: Any) -> None:
+        try:
+            iv = int(round(float(v)))
+        except Exception:
+            return
+        iv = max(self._min, min(self._max, iv))
+        self.slider.setValue(iv)
+        self.spin.setValue(iv)
+
+
+class _FloatSlider(QWidget):
+    """Slider + exact spin box for float parameters (exposes setValue/value)."""
+
+    valueChanged = pyqtSignal(float)
+
+    def __init__(self, value: Any, minimum: float, maximum: float, step: float = 0.1,
+                 decimals: int = 3, unit: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._min = float(minimum)
+        self._max = float(maximum)
+        self._decimals = decimals
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(0, 1000)
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(50)
+        self.spin = QDoubleSpinBox()
+        self.spin.setRange(self._min, self._max)
+        self.spin.setSingleStep(step)
+        self.spin.setDecimals(decimals)
+        self.spin.setFixedWidth(110)
+        if unit:
+            self.spin.setSuffix(f" {unit}")
+        try:
+            fvalue = float(value if value is not None else 0.0)
+        except Exception:
+            fvalue = self._min
+        fvalue = max(self._min, min(self._max, fvalue))
+        self.spin.setValue(fvalue)
+        self.slider.setValue(self._to_slider(fvalue))
+        self.slider.valueChanged.connect(self._from_slider)
+        self.spin.valueChanged.connect(self._from_spin)
+        lay.addWidget(self.slider, 1)
+        lay.addWidget(self.spin)
+
+    def _to_slider(self, v: float) -> int:
+        span = self._max - self._min
+        if span <= 0:
+            return 0
+        return int(round((v - self._min) / span * 1000))
+
+    def _to_value(self, s: int) -> float:
+        return self._min + (self._max - self._min) * (s / 1000.0)
+
+    def _from_slider(self, s: int) -> None:
+        v = round(self._to_value(s), self._decimals)
+        if abs(self.spin.value() - v) > 10 ** (-self._decimals):
+            self.spin.blockSignals(True)
+            self.spin.setValue(v)
+            self.spin.blockSignals(False)
+        self.valueChanged.emit(float(v))
+
+    def _from_spin(self, v: float) -> None:
+        s = self._to_slider(float(v))
+        if self.slider.value() != s:
+            self.slider.blockSignals(True)
+            self.slider.setValue(s)
+            self.slider.blockSignals(False)
+        self.valueChanged.emit(float(v))
+
+    def value(self) -> float:
+        return float(self.spin.value())
+
+    def setValue(self, v: Any) -> None:
+        try:
+            fv = float(v)
+        except Exception:
+            return
+        fv = max(self._min, min(self._max, fv))
+        self.spin.setValue(fv)
+        self.slider.setValue(self._to_slider(fv))
+
+
 class SystemControlPanel(QWidget):
     """A self-contained editor for one simulator system."""
 
@@ -146,16 +290,26 @@ class SystemControlPanel(QWidget):
         self.set_config(self.cfg)
 
     # ------------------------------------------------------------------
-    # Generic widget helpers
+    # Widget helpers
     # ------------------------------------------------------------------
     def _group(self, body_layout: QVBoxLayout, title: str, description: str = "") -> QFormLayout:
         box = QGroupBox(title)
+        box.setStyleSheet(
+            f"QGroupBox {{ {_FONT_SECTION} color:#0F172A; border:1px solid #E2E8F0; "
+            "border-radius:8px; background:#FFFFFF; margin-top:14px; padding-top:6px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left:10px; padding:0 6px; "
+            "background:#FFFFFF; color:#1E3A8A; }"
+        )
         form = QFormLayout(box)
+        form.setContentsMargins(14, 14, 14, 14)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         if description:
             label = QLabel(description)
             label.setWordWrap(True)
-            label.setStyleSheet("color:#64748b; font-size:10px;")
+            label.setStyleSheet(_FONT_HINT)
             form.addRow(label)
         body_layout.addWidget(box)
         return form
@@ -167,13 +321,55 @@ class SystemControlPanel(QWidget):
         name: str,
         path: PathLike,
         widget: QWidget,
+        hint: str = "",
     ) -> QWidget:
         self.controls[name] = (path, widget)
-        form.addRow(label, widget)
+        # Keep dependent controls visually honest while the user edits the
+        # staged configuration.  Signals are connected here so preset loads
+        # and manual edits use the same dependency rules.
+        if name in {
+            "experiment.input_mode",
+            "target.shape",
+            "target.trajectory",
+            "target.initial_mode",
+            "noise.gaussian_enabled",
+            "noise.salt_pepper_enabled",
+            "environment.gradient_enabled",
+            "environment.stars_enabled",
+            "environment.vignetting_enabled",
+            "ai.enabled",
+            "ai.signatures.enabled",
+        }:
+            if isinstance(widget, QCheckBox):
+                widget.toggled.connect(lambda _checked: self._on_conditional_changed())
+            elif isinstance(widget, QComboBox):
+                widget.currentTextChanged.connect(lambda _text: self._on_conditional_changed())
+        name_label = QLabel(label)
+        name_label.setStyleSheet(_FONT_LABEL)
+        name_label.setWordWrap(True)
+        name_label.setMinimumWidth(210)
+        if hint:
+            widget.setToolTip(hint)
+            name_label.setToolTip(hint)
+        if hint and isinstance(widget, (_IntSlider, _FloatSlider)):
+            hint_label = QLabel(hint)
+            hint_label.setWordWrap(True)
+            hint_label.setStyleSheet("color:#94A3B8; font-size:10px;")
+            holder = QWidget()
+            vlay = QVBoxLayout(holder)
+            vlay.setContentsMargins(0, 0, 0, 0)
+            vlay.setSpacing(2)
+            vlay.addWidget(widget)
+            vlay.addWidget(hint_label)
+            form.addRow(name_label, holder)
+        else:
+            form.addRow(name_label, widget)
         return widget
 
     def _combo(self, values: Iterable[str], value: Any) -> QComboBox:
         widget = QComboBox()
+        widget.setMinimumHeight(28)
+        widget.setStyleSheet(_FONT_VALUE)
         items = [str(item) for item in values]
         current = str(value if value is not None else "")
         if current and current not in items:
@@ -183,12 +379,8 @@ class SystemControlPanel(QWidget):
             widget.setCurrentText(current)
         return widget
 
-    def _int_spin(self, value: Any, minimum: int, maximum: int, step: int = 1) -> QSpinBox:
-        widget = QSpinBox()
-        widget.setRange(minimum, maximum)
-        widget.setSingleStep(step)
-        widget.setValue(int(round(float(value if value is not None else 0))))
-        return widget
+    def _int_spin(self, value: Any, minimum: int, maximum: int, step: int = 1, unit: str = "") -> _IntSlider:
+        return _IntSlider(value, minimum, maximum, step, unit, self)
 
     def _float_spin(
         self,
@@ -197,29 +389,30 @@ class SystemControlPanel(QWidget):
         maximum: float,
         step: float = 0.1,
         decimals: int = 3,
-    ) -> QDoubleSpinBox:
-        widget = QDoubleSpinBox()
-        widget.setRange(minimum, maximum)
-        widget.setSingleStep(step)
-        widget.setDecimals(decimals)
-        widget.setValue(float(value if value is not None else 0.0))
-        return widget
+        unit: str = "",
+    ) -> _FloatSlider:
+        return _FloatSlider(value, minimum, maximum, step, decimals, unit, self)
 
     def _check(self, value: Any, text: str) -> QCheckBox:
         widget = QCheckBox(text)
         widget.setChecked(bool(value))
+        widget.setStyleSheet("font-size:12px; color:#0F172A; spacing:8px;")
         return widget
 
     def _line(self, value: Any, placeholder: str = "") -> QLineEdit:
         widget = QLineEdit(str(value if value is not None else ""))
         widget.setPlaceholderText(placeholder)
+        widget.setMinimumHeight(28)
+        widget.setStyleSheet(_FONT_VALUE)
         return widget
 
     def _json_editor(self, value: Any, placeholder: str = "") -> QPlainTextEdit:
         widget = QPlainTextEdit()
-        widget.setMaximumHeight(110)
+        widget.setMaximumHeight(96)
+        widget.setMinimumHeight(56)
         widget.setPlaceholderText(placeholder)
         widget.setPlainText(_json_text(value))
+        widget.setStyleSheet("font-size:11px; font-family:'Consolas','JetBrains Mono',monospace;")
         return widget
 
     # ------------------------------------------------------------------
@@ -227,40 +420,16 @@ class SystemControlPanel(QWidget):
     # ------------------------------------------------------------------
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
-
-        title = "AI SYSTEM — identity, candidates, decoys, and AI runtime"
-        subtitle = (
-            "AI-only controls live here. Changes are staged independently "
-            "from the deterministic/classical portion."
-        )
-        if not self.is_ai_panel:
-            title = "DETERMINISTIC SYSTEM — classical detector → EKF-IMM → PID"
-            subtitle = (
-                "The existing deterministic path has its own complete copy of "
-                "the run, scene, detector, tracker, and environment parameters."
-            )
-        heading = QLabel(title)
-        heading.setWordWrap(True)
-        heading.setStyleSheet(
-            "font-size:13px; font-weight:800; color:#1e3a8a;"
-            if self.is_ai_panel
-            else "font-size:13px; font-weight:800; color:#334155;"
-        )
-        root.addWidget(heading)
-        detail = QLabel(subtitle)
-        detail.setWordWrap(True)
-        detail.setStyleSheet("color:#64748b; font-size:10px;")
-        root.addWidget(detail)
+        root.setContentsMargins(2, 2, 2, 2)
+        root.setSpacing(10)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         body = QWidget()
         body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(4, 4, 4, 4)
-        body_layout.setSpacing(9)
+        body_layout.setContentsMargins(6, 6, 6, 6)
+        body_layout.setSpacing(12)
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
 
@@ -284,26 +453,32 @@ class SystemControlPanel(QWidget):
         # ----- Presets and run -------------------------------------
         presets_form = self._group(
             body_layout,
-            "Presets & Run",
-            "Only presets owned by this system appear here. Benchmark P01–P12 files remain outside the GUI.",
+            "1 · Presets & Run",
+            "Only presets owned by this mode appear here. Benchmark P01–P12 files stay outside the GUI.",
         )
         self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumHeight(30)
+        self.preset_combo.setStyleSheet("font-size:12px; font-weight:600;")
         self.preset_combo.addItems([info.display_name for info in self.presets] + ["Custom"])
-        self._add(presets_form, "Preset", "preset", ("__preset__",), self.preset_combo)
-        self.preset_desc = QLabel("Select a preset and load it into this portion.")
+        self._add(presets_form, "Preset", "preset", ("__preset__",), self.preset_combo,
+                  "Load a curated starting point into this mode only.")
+        self.preset_desc = QLabel("Select a preset and load it into this mode.")
         self.preset_desc.setWordWrap(True)
-        self.preset_desc.setStyleSheet("color:#64748b; font-size:10px;")
+        self.preset_desc.setStyleSheet(_FONT_HINT)
         presets_form.addRow("", self.preset_desc)
         self.preset_expected = QLabel("")
         self.preset_expected.setWordWrap(True)
         self.preset_expected.setStyleSheet(
-            "color:#0f172a; font-size:10px; background:#f1f5f9; padding:5px; border-radius:4px;"
+            "color:#0F172A; font-size:11px; background:#F1F5F9; padding:6px; border-radius:6px;"
         )
         self.preset_expected.hide()
         presets_form.addRow("", self.preset_expected)
         buttons = QHBoxLayout()
+        buttons.setSpacing(8)
         self.btn_load_preset = QPushButton("Load Preset")
         self.btn_save_preset = QPushButton("Save As…")
+        self.btn_load_preset.setMinimumHeight(30)
+        self.btn_save_preset.setMinimumHeight(30)
         buttons.addWidget(self.btn_load_preset)
         buttons.addWidget(self.btn_save_preset)
         buttons.addStretch()
@@ -316,13 +491,15 @@ class SystemControlPanel(QWidget):
             "experiment.seed",
             ("experiment", "seed"),
             self._int_spin(experiment.get("seed", 42), 0, 999999),
+            "Scenario variation. Same seed replays the same run.",
         )
         self._add(
             presets_form,
-            "Duration (s)",
+            "Run Duration",
             "experiment.duration_s",
             ("experiment", "duration_s"),
-            self._float_spin(experiment.get("duration_s", 30), 1, 600, 1, 1),
+            self._float_spin(experiment.get("duration_s", 30), 1, 600, 1, 1, "s"),
+            "Length of one run in seconds.",
         )
         self.btn_load_preset.clicked.connect(self._request_load)
         self.btn_save_preset.clicked.connect(self.presetSaveRequested.emit)
@@ -331,117 +508,185 @@ class SystemControlPanel(QWidget):
         # ----- Target and scene -------------------------------------
         target_form = self._group(
             body_layout,
-            "Target & Scene",
-            "This is a private staged copy; it is not shared with the other system portion.",
+            "2 · Target & Scene",
+            "Private staged copy — never shared with the other mode.",
         )
-        self._add(target_form, "Target Type", "target.type", ("target", "type"), self._combo(["beacon_spot", "beacon", "spot"], target.get("type", "beacon_spot")))
-        self._add(target_form, "Rendered Target Count", "target.count", ("target", "count"), self._int_spin(target.get("count", 1), 1, 5))
-        self._add(target_form, "Shape", "target.shape", ("target", "shape"), self._combo(["square", "circle", "gaussian", "cross", "user-defined"], target.get("shape", "square")))
-        self._add(target_form, "Custom Polygon (JSON)", "target.custom_polygon", ("target", "custom_polygon"), self._json_editor(target.get("custom_polygon"), "[[-5,-5],[5,-5],[0,5]]"))
-        self._add(target_form, "Size (px)", "target.size", ("target", "size"), self._int_spin(target.get("size", 10), 5, 20))
-        self._add(target_form, "Intensity", "target.intensity", ("target", "intensity"), self._int_spin(target.get("intensity", 255), 0, 255))
-        self._add(target_form, "Initial Position Mode", "target.initial_mode", ("target", "initial_mode"), self._combo(["random", "centre", "center", "user-defined"], target.get("initial_mode", "random")))
-        self._add(target_form, "Initial X", "target.initial_x", ("target", "initial_pos", 0), self._int_spin((target.get("initial_pos") or [1000, 1000])[0], 0, 4000))
-        self._add(target_form, "Initial Y", "target.initial_y", ("target", "initial_pos", 1), self._int_spin((target.get("initial_pos") or [1000, 1000])[1], 0, 4000))
-        self._add(target_form, "Trajectory", "target.trajectory", ("target", "trajectory"), self._combo(["straight", "circular", "figure_eight", "random", "spiral", "sinusoidal", "user-defined"], target.get("trajectory", "circular")))
-        self._add(target_form, "Custom Trajectory (CSV path)", "target.custom_trajectory_file", ("target", "custom_trajectory_file"), self._line(target.get("custom_trajectory_file", ""), "Optional CSV path"))
-        self._add(target_form, "Speed (px/frame)", "target.speed_px_per_frame", ("target", "speed_px_per_frame"), self._float_spin(target.get("speed_px_per_frame", 2.8), 0, 20, 0.1, 3))
-        self._add(target_form, "Angle (straight)", "target.angle_deg", ("target", "angle_deg"), self._float_spin(target.get("angle_deg", 30), 0, 360, 1, 1))
-        self._add(target_form, "Radius (circular/8)", "target.radius", ("target", "radius"), self._float_spin(target.get("radius", 180), 50, 800, 5, 1))
+        self._add(target_form, "Rendered Target Count", "target.count", ("target", "count"), self._int_spin(target.get("count", 1), 1, 5),
+                  "How many beacon-like spots the scene renders (1 mandatory, multiple optional).")
+        self._add(target_form, "Target Type", "target.type", ("target", "type"),
+                  self._combo(["beacon_spot", "point", "extended", "custom"], target.get("type", "beacon_spot")))
+        self._add(target_form, "Target Shape", "target.shape", ("target", "shape"), self._combo(["square", "circle", "gaussian", "cross", "user-defined"], target.get("shape", "square")))
+        self._add(target_form, "Custom Polygon", "target.custom_polygon", ("target", "custom_polygon"),
+                  self._json_editor(target.get("custom_polygon"), "[[x, y], [x, y], ...]"),
+                  "Optional JSON polygon used when Target Shape is user-defined.")
+        self._add(target_form, "Target Size", "target.size", ("target", "size"), self._int_spin(target.get("size", 10), 5, 20, 1, "px"),
+                  "Apparent spot diameter in pixels (5–20).")
+        self._add(target_form, "Target Intensity", "target.intensity", ("target", "intensity"), self._int_spin(target.get("intensity", 255), 0, 255),
+                  "Peak rendered brightness 0–255.")
+        self._add(target_form, "Start Position Mode", "target.initial_mode", ("target", "initial_mode"), self._combo(["random", "centre", "center", "user-defined"], target.get("initial_mode", "random")))
+        self._add(target_form, "Start Position X", "target.initial_x", ("target", "initial_pos", 0), self._int_spin((target.get("initial_pos") or [1000, 1000])[0], 0, 4000, 10, "px"))
+        self._add(target_form, "Start Position Y", "target.initial_y", ("target", "initial_pos", 1), self._int_spin((target.get("initial_pos") or [1000, 1000])[1], 0, 4000, 10, "px"))
+        self._add(target_form, "Trajectory", "target.trajectory", ("target", "trajectory"), self._combo(["straight", "circular", "figure_eight", "random", "spiral", "sinusoidal", "user-defined"], target.get("trajectory", "circular")),
+                  "Motion pattern — straight, circular, figure-8 and random required; spiral/sinusoidal optional.")
+        self._add(target_form, "Custom Trajectory File", "target.custom_trajectory_file",
+                  ("target", "custom_trajectory_file"),
+                  self._line(target.get("custom_trajectory_file", ""), "path/to/trajectory.json"),
+                  "Optional trajectory file used when Trajectory is user-defined.")
+        self._add(target_form, "Target Speed", "target.speed_px_per_frame", ("target", "speed_px_per_frame"), self._float_spin(target.get("speed_px_per_frame", 2.8), 0, 20, 0.1, 2, "px/frame"),
+                  "Physical speed limit feeds the identity motion check.")
+        self._add(target_form, "Heading Angle (straight)", "target.angle_deg", ("target", "angle_deg"), self._float_spin(target.get("angle_deg", 30), 0, 360, 1, 1, "°"))
+        self._add(target_form, "Orbit Radius (circular / figure-8)", "target.radius", ("target", "radius"), self._float_spin(target.get("radius", 180), 50, 800, 5, 1, "px"))
 
         # ----- Camera ------------------------------------------------
-        camera_form = self._group(body_layout, "Camera", "Camera geometry and motion limits for this system profile.")
-        self._add(camera_form, "Camera Type", "camera.type", ("camera", "type"), self._combo(["monochrome", "colour", "color"], camera.get("type", "monochrome")))
-        self._add(camera_form, "Resolution Width", "camera.resolution.0", ("camera", "resolution", 0), self._int_spin((camera.get("resolution") or [640, 480])[0], 320, 1920))
-        self._add(camera_form, "Resolution Height", "camera.resolution.1", ("camera", "resolution", 1), self._int_spin((camera.get("resolution") or [640, 480])[1], 240, 1080))
-        self._add(camera_form, "Horizontal FOV (°)", "camera.fov_deg.0", ("camera", "fov_deg", 0), self._float_spin((camera.get("fov_deg") or [4, 3])[0], 1, 12, 0.1, 2))
-        self._add(camera_form, "Vertical FOV (°)", "camera.fov_deg.1", ("camera", "fov_deg", 1), self._float_spin((camera.get("fov_deg") or [4, 3])[1], 1, 12, 0.1, 2))
-        self._add(camera_form, "Frame Rate (Hz)", "camera.fps", ("camera", "fps"), self._int_spin(camera.get("fps", 30), 30, 60))
-        self._add(camera_form, "Initial Position", "camera.initial_position", ("camera", "initial_position"), self._combo(["centre", "center", "user-defined"], camera.get("initial_position", "centre")))
-        self._add(camera_form, "Initial Pan (°)", "camera.initial_pan", ("camera", "initial_pan"), self._float_spin(camera.get("initial_pan", 0), -180, 180, 1, 2))
-        self._add(camera_form, "Initial Tilt (°)", "camera.initial_tilt", ("camera", "initial_tilt"), self._float_spin(camera.get("initial_tilt", 0), -90, 90, 1, 2))
-        self._add(camera_form, "Max Pan Speed (°/s)", "camera.max_pan_speed", ("camera", "max_pan_speed"), self._float_spin(camera.get("max_pan_speed", 5), 1, 15, 0.5, 2))
-        self._add(camera_form, "Max Tilt Speed (°/s)", "camera.max_tilt_speed", ("camera", "max_tilt_speed"), self._float_spin(camera.get("max_tilt_speed", 5), 1, 15, 0.5, 2))
-        self._add(camera_form, "Update Rate (Hz)", "camera.update_interval_hz", ("camera", "update_interval_hz"), self._int_spin(camera.get("update_interval_hz", 30), 20, 60))
-        self._add(camera_form, "Jitter ±px/frame", "camera.jitter_px", ("camera", "jitter_px"), self._float_spin(camera.get("jitter_px", 0), 0, 20, 0.5, 2))
+        camera_form = self._group(body_layout, "3 · Camera", "Sensor geometry and pan/tilt motion limits for this mode.")
+        self._add(camera_form, "Sensor Type", "camera.type", ("camera", "type"), self._combo(["monochrome", "colour", "color"], camera.get("type", "monochrome")))
+        self._add(camera_form, "Resolution Width", "camera.resolution.0", ("camera", "resolution", 0), self._int_spin((camera.get("resolution") or [640, 480])[0], 320, 1920, 10, "px"))
+        self._add(camera_form, "Resolution Height", "camera.resolution.1", ("camera", "resolution", 1), self._int_spin((camera.get("resolution") or [640, 480])[1], 240, 1080, 10, "px"))
+        self._add(camera_form, "Horizontal Field of View", "camera.fov_deg.0", ("camera", "fov_deg", 0), self._float_spin((camera.get("fov_deg") or [4, 3])[0], 1, 12, 0.1, 2, "°"))
+        self._add(camera_form, "Vertical Field of View", "camera.fov_deg.1", ("camera", "fov_deg", 1), self._float_spin((camera.get("fov_deg") or [4, 3])[1], 1, 12, 0.1, 2, "°"))
+        self._add(camera_form, "Frame Rate", "camera.fps", ("camera", "fps"), self._int_spin(camera.get("fps", 30), 30, 60, 1, "Hz"))
+        self._add(camera_form, "Start Position", "camera.initial_position", ("camera", "initial_position"), self._combo(["centre", "center", "user-defined"], camera.get("initial_position", "centre")),
+                  "Where the camera looks at run start (centre of the screen by default).")
+        self._add(camera_form, "Initial Pan", "camera.initial_pan", ("camera", "initial_pan"),
+                  self._float_spin(camera.get("initial_pan", 0), -180, 180, 0.5, 2, "°"))
+        self._add(camera_form, "Initial Tilt", "camera.initial_tilt", ("camera", "initial_tilt"),
+                  self._float_spin(camera.get("initial_tilt", 0), -90, 90, 0.5, 2, "°"))
+        self._add(camera_form, "Max Pan Speed", "camera.max_pan_speed", ("camera", "max_pan_speed"), self._float_spin(camera.get("max_pan_speed", 5), 1, 15, 0.5, 2, "°/s"),
+                  "Physical slew limit — search never exceeds it.")
+        self._add(camera_form, "Max Tilt Speed", "camera.max_tilt_speed", ("camera", "max_tilt_speed"), self._float_spin(camera.get("max_tilt_speed", 5), 1, 15, 0.5, 2, "°/s"))
+        self._add(camera_form, "Control Update Rate", "camera.update_interval_hz", ("camera", "update_interval_hz"), self._int_spin(camera.get("update_interval_hz", 30), 20, 60, 1, "Hz"))
+        self._add(camera_form, "Camera Jitter", "camera.jitter_px", ("camera", "jitter_px"), self._float_spin(camera.get("jitter_px", 0), 0, 20, 0.5, 2, "px"),
+                  "Random per-frame shake applied to the sensor.")
+        self._add(camera_form, "Video Centre Offset X", "camera.video_centre_offset_x",
+                  ("camera", "video_centre_offset_x"),
+                  self._float_spin(camera.get("video_centre_offset_x", 0), -2000, 2000, 1, 1, "px"),
+                  "Principal-point correction for external video; active only in VIDEO mode.")
+        self._add(camera_form, "Video Centre Offset Y", "camera.video_centre_offset_y",
+                  ("camera", "video_centre_offset_y"),
+                  self._float_spin(camera.get("video_centre_offset_y", 0), -2000, 2000, 1, 1, "px"),
+                  "Principal-point correction for external video; active only in VIDEO mode.")
 
         # ----- Detection ---------------------------------------------
-        detection_form = self._group(body_layout, "Detection", "Classical detector parameters; AI candidate settings are in the AI-only group below.")
-        self._add(detection_form, "Threshold k", "detector.threshold_k", ("detector", "threshold_k"), self._float_spin(detector.get("threshold_k", 3), 1.5, 8, 0.1, 2))
-        self._add(detection_form, "Minimum Area", "detector.min_area", ("detector", "min_area"), self._int_spin(detector.get("min_area", 8), 2, 200))
-        self._add(detection_form, "Maximum Area", "detector.max_area", ("detector", "max_area"), self._int_spin(detector.get("max_area", 900), 20, 5000))
-        self._add(detection_form, "Blur Kernel", "detector.blur_ksize", ("detector", "blur_ksize"), self._int_spin(detector.get("blur_ksize", 3), 1, 15, 2))
-        self._add(detection_form, "Adaptive Block", "detector.adaptive_block", ("detector", "adaptive_block"), self._int_spin(detector.get("adaptive_block", 51), 3, 301, 2))
-        self._add(detection_form, "Adaptive C", "detector.adaptive_C", ("detector", "adaptive_C"), self._int_spin(detector.get("adaptive_C", -5), -50, 50))
+        detection_form = self._group(body_layout, "4 · Detection", "Classical bright-spot stage. AI candidate settings live in section 8 (AI mode only).")
+        self._add(detection_form, "Detection Threshold (k × σ)", "detector.threshold_k", ("detector", "threshold_k"), self._float_spin(detector.get("threshold_k", 3), 1.5, 8, 0.1, 2, "σ"),
+                  "Pixels brighter than median + k·noise become candidates.")
+        self._add(detection_form, "Minimum Blob Area", "detector.min_area", ("detector", "min_area"), self._int_spin(detector.get("min_area", 8), 2, 200, 1, "px²"))
+        self._add(detection_form, "Maximum Blob Area", "detector.max_area", ("detector", "max_area"), self._int_spin(detector.get("max_area", 900), 20, 5000, 10, "px²"),
+                  "Ignore blobs larger than this (clutter rejection).")
+        self._add(detection_form, "Blur Kernel Size", "detector.blur_ksize", ("detector", "blur_ksize"),
+                  self._int_spin(detector.get("blur_ksize", 3), 1, 31, 2, "px"),
+                  "Odd-sized smoothing kernel applied before thresholding.")
 
         # ----- Search and tracker ------------------------------------
-        search_form = self._group(body_layout, "Search & Tracker", "Deterministic recovery and IMM/EKF parameters for this system profile.")
-        self._add(search_form, "Search Mode", "search.mode", ("search", "mode"), self._combo(["spiral", "raster", "hybrid"], search.get("mode", "spiral")))
-        self._add(search_form, "ROI Size (px)", "search.roi_size", ("search", "roi_size"), self._int_spin(search.get("roi_size", 160), 40, 800))
-        self._add(search_form, "Local Loss Timeout (frames)", "tracker.lost_timeout_frames", ("tracker", "lost_timeout_frames"), self._int_spin(tracker.get("lost_timeout_frames", 15), 1, 100))
-        self._add(search_form, "Re-acquisition Timeout (frames)", "tracker.reacq_timeout_frames", ("tracker", "reacq_timeout_frames"), self._int_spin(tracker.get("reacq_timeout_frames", 30), 1, 300))
-        self._add(search_form, "Process Noise", "tracker.process_noise", ("tracker", "process_noise"), self._float_spin(tracker.get("process_noise", 0.8), 0, 20, 0.1, 3))
-        self._add(search_form, "Measurement Noise", "tracker.meas_noise", ("tracker", "meas_noise"), self._float_spin(tracker.get("meas_noise", 4), 0.1, 50, 0.1, 3))
-        self._add(search_form, "Association Gate σ", "tracker.gate_sigma", ("tracker", "gate_sigma"), self._float_spin(tracker.get("gate_sigma", 5), 0.5, 30, 0.5, 2))
+        search_form = self._group(body_layout, "5 · Search & Tracker", "Recovery behaviour and EKF/IMM estimator tuning for this mode.")
+        self._add(search_form, "Search Pattern", "search.mode", ("search", "mode"), self._combo(["spiral", "raster", "hybrid"], search.get("mode", "spiral")))
+        self._add(search_form, "Search ROI Size", "search.roi_size", ("search", "roi_size"), self._int_spin(search.get("roi_size", 160), 40, 800, 10, "px"),
+                  "Local recovery window around the predicted position.")
+        self._add(search_form, "Local Recovery Timeout", "tracker.lost_timeout_frames", ("tracker", "lost_timeout_frames"), self._int_spin(tracker.get("lost_timeout_frames", 15), 1, 100, 1, "frames"))
+        self._add(search_form, "Global Re-acquisition Timeout", "tracker.reacq_timeout_frames", ("tracker", "reacq_timeout_frames"), self._int_spin(tracker.get("reacq_timeout_frames", 30), 1, 300, 1, "frames"),
+                  "Keep short — spec requires re-acquisition ≤ 1 s.")
+        self._add(search_form, "EKF Process Noise", "tracker.process_noise", ("tracker", "process_noise"), self._float_spin(tracker.get("process_noise", 0.8), 0, 20, 0.1, 3),
+                  "Higher trusts the model less during manoeuvres.")
+        self._add(search_form, "EKF Measurement Noise", "tracker.meas_noise", ("tracker", "meas_noise"), self._float_spin(tracker.get("meas_noise", 4), 0.1, 50, 0.1, 3, "px"))
+        self._add(search_form, "Association Gate", "tracker.gate_sigma", ("tracker", "gate_sigma"), self._float_spin(tracker.get("gate_sigma", 5), 0.5, 30, 0.5, 2, "σ"))
 
         # ----- Estimator and controller ------------------------------
-        control_form = self._group(body_layout, "Estimator & Controller", "PID and EKF-IMM parameters for the selected system profile.")
-        self._add(control_form, "Kp Pan", "controller.kp_pan", ("controller", "kp_pan"), self._float_spin(controller.get("kp_pan", 1.2), 0, 20, 0.1, 3))
-        self._add(control_form, "Kp Tilt", "controller.kp_tilt", ("controller", "kp_tilt"), self._float_spin(controller.get("kp_tilt", 1.2), 0, 20, 0.1, 3))
-        self._add(control_form, "Ki", "controller.ki", ("controller", "ki"), self._float_spin(controller.get("ki", 0.05), 0, 10, 0.01, 3))
-        self._add(control_form, "Kd", "controller.kd", ("controller", "kd"), self._float_spin(controller.get("kd", 0.15), 0, 10, 0.01, 3))
-        self._add(control_form, "Deadzone (px)", "controller.deadzone_px", ("controller", "deadzone_px"), self._float_spin(controller.get("deadzone_px", 2), 0, 50, 0.5, 2))
-        self._add(control_form, "Integral Limit", "controller.integral_limit", ("controller", "integral_limit"), self._float_spin(controller.get("integral_limit", 8), 0, 100, 0.5, 2))
-        self._add(control_form, "Feedforward Gain", "controller.feedforward_gain", ("controller", "feedforward_gain"), self._float_spin(controller.get("feedforward_gain", 0), 0, 20, 0.1, 3))
+        control_form = self._group(body_layout, "6 · Controller (PID)", "Pan/tilt servo gains and safety limits.")
+        self._add(control_form, "Proportional Gain — Pan", "controller.kp_pan", ("controller", "kp_pan"), self._float_spin(controller.get("kp_pan", 1.2), 0, 20, 0.1, 3))
+        self._add(control_form, "Proportional Gain — Tilt", "controller.kp_tilt", ("controller", "kp_tilt"), self._float_spin(controller.get("kp_tilt", 1.2), 0, 20, 0.1, 3))
+        self._add(control_form, "Integral Gain", "controller.ki", ("controller", "ki"), self._float_spin(controller.get("ki", 0.05), 0, 10, 0.01, 3),
+                  "Reset automatically on target loss.")
+        self._add(control_form, "Derivative Gain", "controller.kd", ("controller", "kd"), self._float_spin(controller.get("kd", 0.15), 0, 10, 0.01, 3))
+        self._add(control_form, "Dead Zone", "controller.deadzone_px", ("controller", "deadzone_px"), self._float_spin(controller.get("deadzone_px", 2), 0, 50, 0.5, 2, "px"),
+                  "Errors inside this zone command zero rate.")
+        self._add(control_form, "Integral Limit", "controller.integral_limit", ("controller", "integral_limit"), self._float_spin(controller.get("integral_limit", 8), 0, 100, 0.5, 2),
+                  "Anti-windup cap on the integral term.")
 
         # ----- Environment and disturbances --------------------------
-        env_form = self._group(body_layout, "World & Environment", "World, platform, background, stars, vignetting, and brightness settings.")
-        self._add(env_form, "World Width", "world.width", ("world", "width"), self._int_spin(world.get("width", 2000), 2000, 4000))
-        self._add(env_form, "World Height", "world.height", ("world", "height"), self._int_spin(world.get("height", 2000), 2000, 4000))
-        self._add(env_form, "Background Intensity", "world.background", ("world", "background"), self._int_spin(world.get("background", 18), 0, 79))
-        self._add(env_form, "Platform Type", "platform.type", ("platform", "type"), self._combo(["none", "linear", "circular", "random", "spiral", "figure_of_8"], platform.get("type", "none")))
-        self._add(env_form, "Platform Speed", "platform.speed_px_per_frame", ("platform", "speed_px_per_frame"), self._float_spin(platform.get("speed_px_per_frame", 0), 0, 20, 0.5, 2))
-        self._add(env_form, "Platform Amplitude", "platform.amplitude", ("platform", "amplitude"), self._float_spin(platform.get("amplitude", 0), 0, 200, 1, 2))
-        self._add(env_form, "Gradient Enabled", "environment.gradient_enabled", ("environment", "gradient_enabled"), self._check(environment.get("gradient_enabled", False), "Enable background gradient"))
-        self._add(env_form, "Gradient Type", "environment.gradient_type", ("environment", "gradient_type"), self._combo(["linear", "radial", "diagonal"], environment.get("gradient_type", "linear")))
-        self._add(env_form, "Gradient Top", "environment.gradient_top", ("environment", "gradient_top"), self._int_spin(environment.get("gradient_top", 22), 0, 255))
-        self._add(env_form, "Gradient Bottom", "environment.gradient_bottom", ("environment", "gradient_bottom"), self._int_spin(environment.get("gradient_bottom", 38), 0, 255))
-        self._add(env_form, "Gradient Angle", "environment.gradient_angle", ("environment", "gradient_angle"), self._int_spin(environment.get("gradient_angle", 90), 0, 360))
-        self._add(env_form, "Stars Enabled", "environment.stars_enabled", ("environment", "stars_enabled"), self._check(environment.get("stars_enabled", False), "Enable stars clutter"))
-        self._add(env_form, "Stars Density", "environment.stars_density", ("environment", "stars_density"), self._float_spin(environment.get("stars_density", 0.0007), 0, 0.1, 0.0001, 6))
-        self._add(env_form, "Stars Brightness", "environment.stars_brightness", ("environment", "stars_brightness"), self._int_spin(environment.get("stars_brightness", 185), 0, 255))
-        self._add(env_form, "Stars Min Magnitude", "environment.stars_min_mag", ("environment", "stars_min_mag"), self._int_spin(environment.get("stars_min_mag", 90), 0, 255))
-        self._add(env_form, "Stars Max Magnitude", "environment.stars_max_mag", ("environment", "stars_max_mag"), self._int_spin(environment.get("stars_max_mag", 255), 0, 255))
-        self._add(env_form, "Stars Twinkle", "environment.stars_twinkle", ("environment", "stars_twinkle"), self._check(environment.get("stars_twinkle", False), "Enable per-frame twinkle"))
-        self._add(env_form, "Stars Seed", "environment.stars_seed", ("environment", "stars_seed"), self._int_spin(environment.get("stars_seed", 1337), 0, 999999))
-        self._add(env_form, "Vignetting Enabled", "environment.vignetting_enabled", ("environment", "vignetting_enabled"), self._check(environment.get("vignetting_enabled", False), "Enable lens falloff"))
-        self._add(env_form, "Vignetting Strength", "environment.vignetting_strength", ("environment", "vignetting_strength"), self._float_spin(environment.get("vignetting_strength", 0.42), 0, 1, 0.05, 3))
-        self._add(env_form, "Vignetting Radius", "environment.vignetting_radius", ("environment", "vignetting_radius"), self._float_spin(environment.get("vignetting_radius", 0.72), 0, 1, 0.05, 3))
-        self._add(env_form, "Vignetting Falloff", "environment.vignetting_falloff", ("environment", "vignetting_falloff"), self._float_spin(environment.get("vignetting_falloff", 2), 0, 20, 0.1, 3))
-        self._add(env_form, "Vignetting Center X", "environment.vignetting_center_x", ("environment", "vignetting_center_x"), self._float_spin(environment.get("vignetting_center_x", 0.5), 0, 1, 0.05, 3))
-        self._add(env_form, "Vignetting Center Y", "environment.vignetting_center_y", ("environment", "vignetting_center_y"), self._float_spin(environment.get("vignetting_center_y", 0.5), 0, 1, 0.05, 3))
-        self._add(env_form, "Brightness Gain", "environment.brightness_gain", ("environment", "brightness_gain"), self._float_spin(environment.get("brightness_gain", 1), 0, 5, 0.05, 3))
-        self._add(env_form, "Brightness Offset", "environment.brightness_offset", ("environment", "brightness_offset"), self._int_spin(environment.get("brightness_offset", 0), -255, 255))
+        env_form = self._group(body_layout, "7 · World & Platform", "Scene size and platform motion (per requirements §Camera/Target/Platform).")
+        self._add(env_form, "World Width", "world.width", ("world", "width"), self._int_spin(world.get("width", 2000), 2000, 4000, 50, "px"))
+        self._add(env_form, "World Height", "world.height", ("world", "height"), self._int_spin(world.get("height", 2000), 2000, 4000, 50, "px"))
+        self._add(env_form, "Background Level", "world.background", ("world", "background"), self._int_spin(world.get("background", 18), 0, 79))
+        self._add(env_form, "Platform Motion", "platform.type", ("platform", "type"), self._combo(["none", "linear", "circular", "random", "spiral", "figure_of_8"], platform.get("type", "none")),
+                  "Linear is mandatory; circular/random/spiral/figure-8 optional.")
+        self._add(env_form, "Platform Speed", "platform.speed_px_per_frame", ("platform", "speed_px_per_frame"), self._float_spin(platform.get("speed_px_per_frame", 0), 0, 20, 0.5, 2, "px/frame"),
+                  "Platform drift up to ±20 px/frame.")
+        self._add(env_form, "Gradient Enabled", "environment.gradient_enabled",
+                  ("environment", "gradient_enabled"),
+                  self._check(environment.get("gradient_enabled", False), "Enable background gradient"))
+        self._add(env_form, "Gradient Type", "environment.gradient_type",
+                  ("environment", "gradient_type"),
+                  self._combo(["linear", "radial"], environment.get("gradient_type", "linear")))
+        self._add(env_form, "Gradient Top", "environment.gradient_top",
+                  ("environment", "gradient_top"),
+                  self._int_spin(environment.get("gradient_top", 12), 0, 255))
+        self._add(env_form, "Gradient Bottom", "environment.gradient_bottom",
+                  ("environment", "gradient_bottom"),
+                  self._int_spin(environment.get("gradient_bottom", 24), 0, 255))
+        self._add(env_form, "Gradient Angle", "environment.gradient_angle",
+                  ("environment", "gradient_angle"),
+                  self._float_spin(environment.get("gradient_angle", 90), 0, 360, 1, 1, "°"))
+        self._add(env_form, "Stars Enabled", "environment.stars_enabled",
+                  ("environment", "stars_enabled"),
+                  self._check(environment.get("stars_enabled", False), "Render background stars"))
+        self._add(env_form, "Star Density", "environment.stars_density",
+                  ("environment", "stars_density"),
+                  self._float_spin(environment.get("stars_density", 0.0), 0, 1, 0.001, 4))
+        self._add(env_form, "Star Brightness", "environment.stars_brightness",
+                  ("environment", "stars_brightness"),
+                  self._int_spin(environment.get("stars_brightness", 0), 0, 255))
+        self._add(env_form, "Star Min Magnitude", "environment.stars_min_mag",
+                  ("environment", "stars_min_mag"),
+                  self._float_spin(environment.get("stars_min_mag", 0), -10, 20, 0.1, 1))
+        self._add(env_form, "Star Max Magnitude", "environment.stars_max_mag",
+                  ("environment", "stars_max_mag"),
+                  self._float_spin(environment.get("stars_max_mag", 10), -10, 20, 0.1, 1))
+        self._add(env_form, "Star Twinkle", "environment.stars_twinkle",
+                  ("environment", "stars_twinkle"),
+                  self._check(environment.get("stars_twinkle", False), "Animate star intensity"))
+        self._add(env_form, "Star Seed", "environment.stars_seed",
+                  ("environment", "stars_seed"),
+                  self._int_spin(environment.get("stars_seed", 42), 0, 999999))
+        self._add(env_form, "Vignetting Enabled", "environment.vignetting_enabled",
+                  ("environment", "vignetting_enabled"),
+                  self._check(environment.get("vignetting_enabled", False), "Darken image edges"))
+        self._add(env_form, "Vignetting Strength", "environment.vignetting_strength",
+                  ("environment", "vignetting_strength"),
+                  self._float_spin(environment.get("vignetting_strength", 0.0), 0, 1, 0.01, 2))
+        self._add(env_form, "Vignetting Radius", "environment.vignetting_radius",
+                  ("environment", "vignetting_radius"),
+                  self._float_spin(environment.get("vignetting_radius", 0.8), 0, 2, 0.01, 2))
+        self._add(env_form, "Vignetting Falloff", "environment.vignetting_falloff",
+                  ("environment", "vignetting_falloff"),
+                  self._float_spin(environment.get("vignetting_falloff", 2.0), 0.1, 10, 0.1, 2))
+        self._add(env_form, "Vignetting Centre X", "environment.vignetting_center_x",
+                  ("environment", "vignetting_center_x"),
+                  self._float_spin(environment.get("vignetting_center_x", 0), -1, 1, 0.01, 2))
+        self._add(env_form, "Vignetting Centre Y", "environment.vignetting_center_y",
+                  ("environment", "vignetting_center_y"),
+                  self._float_spin(environment.get("vignetting_center_y", 0), -1, 1, 0.01, 2))
+        self._add(env_form, "Brightness Gain", "environment.brightness_gain",
+                  ("environment", "brightness_gain"),
+                  self._float_spin(environment.get("brightness_gain", 1.0), 0, 4, 0.01, 2, "×"))
+        self._add(env_form, "Brightness Offset", "environment.brightness_offset",
+                  ("environment", "brightness_offset"),
+                  self._int_spin(environment.get("brightness_offset", 0), -255, 255))
 
-        disturb_form = self._group(body_layout, "Disturbances", "Image noise and atmospheric parameters for this system profile.")
-        self._add(disturb_form, "Gaussian Enabled", "noise.gaussian_enabled", ("noise", "gaussian_enabled"), self._check(noise.get("gaussian_enabled", False), "Enable Gaussian noise"))
-        self._add(disturb_form, "Gaussian σ", "noise.gaussian_std", ("noise", "gaussian_std"), self._float_spin(noise.get("gaussian_std", 0), 0, 100, 0.5, 2))
-        self._add(disturb_form, "Salt & Pepper Enabled", "noise.salt_pepper_enabled", ("noise", "salt_pepper_enabled"), self._check(noise.get("salt_pepper_enabled", False), "Enable salt & pepper noise"))
-        self._add(disturb_form, "Salt & Pepper Probability", "noise.salt_pepper_prob", ("noise", "salt_pepper_prob"), self._float_spin(noise.get("salt_pepper_prob", 0), 0, 0.5, 0.005, 4))
-        self._add(disturb_form, "Poisson Enabled", "noise.poisson", ("noise", "poisson"), self._check(noise.get("poisson", False), "Enable Poisson noise"))
+        disturb_form = self._group(body_layout, "7b · Image Noise & Atmosphere", "Sensor noise and weather for this mode.")
+        self._add(disturb_form, "Gaussian Noise", "noise.gaussian_enabled", ("noise", "gaussian_enabled"), self._check(noise.get("gaussian_enabled", False), "Enable Gaussian sensor noise"))
+        self._add(disturb_form, "Gaussian Std-dev", "noise.gaussian_std", ("noise", "gaussian_std"), self._float_spin(noise.get("gaussian_std", 0), 0, 100, 0.5, 2, "px"))
+        self._add(disturb_form, "Salt & Pepper Noise", "noise.salt_pepper_enabled", ("noise", "salt_pepper_enabled"), self._check(noise.get("salt_pepper_enabled", False), "Enable impulse noise"))
+        self._add(disturb_form, "Impulse Probability", "noise.salt_pepper_prob", ("noise", "salt_pepper_prob"), self._float_spin(noise.get("salt_pepper_prob", 0), 0, 0.5, 0.005, 4))
+        self._add(disturb_form, "Photon (Poisson) Noise", "noise.poisson", ("noise", "poisson"), self._check(noise.get("poisson", False), "Enable shot noise"))
         self._add(disturb_form, "Atmosphere", "atmosphere.type", ("atmosphere", "type"), self._combo(["clear", "haze", "fog", "rain", "low_light"], atmosphere.get("type", "clear")))
         self._add(disturb_form, "Atmosphere Strength", "atmosphere.strength", ("atmosphere", "strength"), self._float_spin(atmosphere.get("strength", 0), 0, 1, 0.05, 3))
 
         # ----- Input and video ---------------------------------------
-        input_form = self._group(body_layout, "Input / Video", "Synthetic and external-video input settings for this system profile.")
+        input_form = self._group(body_layout, "8 · Input Source", "Synthetic scene or external video for this mode.")
         self._add(input_form, "Input Mode", "experiment.input_mode", ("experiment", "input_mode"), self._combo(["SYNTHETIC", "VIDEO"], experiment.get("input_mode", "SYNTHETIC")))
-        self._add(input_form, "Video Path", "experiment.video_path", ("experiment", "video_path"), self._line(experiment.get("video_path", ""), "data/input_videos/benchmark.mp4"))
-        self._add(input_form, "Video Centre Offset X", "camera.video_centre_offset_x", ("camera", "video_centre_offset_x"), self._float_spin(camera.get("video_centre_offset_x", 0), -1000, 1000, 1, 2))
-        self._add(input_form, "Video Centre Offset Y", "camera.video_centre_offset_y", ("camera", "video_centre_offset_y"), self._float_spin(camera.get("video_centre_offset_y", 0), -1000, 1000, 1, 2))
-        self._add(input_form, "Preserve Native FPS", "experiment.preserve_native_fps", ("experiment", "preserve_native_fps"), self._check(experiment.get("preserve_native_fps", False), "Preserve source FPS"))
-        self._add(input_form, "Expected FPS", "experiment.expected_fps", ("experiment", "expected_fps"), self._float_spin(experiment.get("expected_fps", 30), 1, 240, 1, 2))
-        self._add(input_form, "Bypass Virtual PTZ", "experiment.bypass_virtual_ptz", ("experiment", "bypass_virtual_ptz"), self._check(experiment.get("bypass_virtual_ptz", False), "Bypass virtual pan/tilt"))
-        self._add(input_form, "Resize Mode", "experiment.resize_mode", ("experiment", "resize_mode"), self._line(experiment.get("resize_mode", "preserve_reference_scale"), "preserve_reference_scale"))
+        self._add(input_form, "Video File", "experiment.video_path", ("experiment", "video_path"), self._line(experiment.get("video_path", ""), "data/input_videos/benchmark.mp4"),
+                  "External .mp4 @30 fps covering the full screen (Benchmark Performance-2).")
+        self._add(input_form, "Bypass Virtual PTZ", "experiment.bypass_virtual_ptz", ("experiment", "bypass_virtual_ptz"), self._check(experiment.get("bypass_virtual_ptz", False), "Measurement-only mode for video benchmarks"))
 
         # ----- AI-only controls --------------------------------------
         if self.is_ai_panel:
@@ -453,6 +698,12 @@ class SystemControlPanel(QWidget):
         self.tgt_count_spin = self.controls["target.count"][1]
         self.tgt_shape_combo = self.controls["target.shape"][1]
         self.size_spin = self.controls["target.size"][1]
+        self.tgt_type_combo = self.controls["target.type"][1]
+        self.tgt_init_mode_combo = self.controls["target.initial_mode"][1]
+        self.tgt_init_x_spin = self.controls["target.initial_x"][1]
+        self.tgt_init_y_spin = self.controls["target.initial_y"][1]
+        self.custom_polygon_edit = self.controls["target.custom_polygon"][1]
+        self.custom_traj_edit = self.controls["target.custom_trajectory_file"][1]
         self.traj_combo = self.controls["target.trajectory"][1]
         self.speed_spin = self.controls["target.speed_px_per_frame"][1]
         self.angle_spin = self.controls["target.angle_deg"][1]
@@ -520,12 +771,6 @@ class SystemControlPanel(QWidget):
         self.gauss_check = self.controls["noise.gaussian_enabled"][1]
         self.spp_check = self.controls["noise.salt_pepper_enabled"][1]
         self.poisson_check = self.controls["noise.poisson"][1]
-        self.tgt_type_combo = self.controls["target.type"][1]
-        self.tgt_init_mode_combo = self.controls["target.initial_mode"][1]
-        self.tgt_init_x_spin = self.controls["target.initial_x"][1]
-        self.tgt_init_y_spin = self.controls["target.initial_y"][1]
-        self.custom_polygon_edit = self.controls["target.custom_polygon"][1]
-        self.custom_traj_edit = self.controls["target.custom_trajectory_file"][1]
         if self.is_ai_panel:
             self.ai_enabled_check = self.controls["ai.enabled"][1]
             self.primary_thr_spin = self.controls["ai.thresholds.primary_threshold"][1]
@@ -561,62 +806,81 @@ class SystemControlPanel(QWidget):
         optical = primary.get("optical_signature", {}) if isinstance(primary, Mapping) else {}
         profiles = decoys.get("profiles", []) if isinstance(decoys, Mapping) else []
 
-        form = self._group(
+        runtime = self._group(
             body_layout,
-            "AI / Identity Controls",
-            "These controls exist only in the AI portion. They are not applied while the deterministic portion is active.",
+            "8 · AI Runtime",
+            "Model paths, patch/sequence geometry and inference budget. Empty model path = safe heuristic fallback.",
         )
-        self._add(form, "AI System Enabled", "ai.enabled", ("ai", "enabled"), self._check(ai.get("enabled", True), "Enable AI identification"))
-        self._add(form, "Fallback on Failure", "ai.fallback_on_failure", ("ai", "fallback_on_failure"), self._check(ai.get("fallback_on_failure", True), "Use deterministic heuristic fallback"))
-        self._add(form, "Patch Size", "ai.patch_size", ("ai", "patch_size"), self._int_spin(ai.get("patch_size", 64), 32, 128))
-        self._add(form, "Sequence Length", "ai.sequence_length", ("ai", "sequence_length"), self._int_spin(ai.get("sequence_length", 25), 10, 100))
-        self._add(form, "GRU Hidden Size", "ai.gru_hidden", ("ai", "gru_hidden"), self._int_spin(ai.get("gru_hidden", 64), 8, 512))
-        self._add(form, "Inference Timeout (ms)", "ai.inference_timeout_ms", ("ai", "inference_timeout_ms"), self._int_spin(ai.get("inference_timeout_ms", 40), 1, 5000))
-        self._add(form, "Primary Threshold", "ai.thresholds.primary_threshold", ("ai", "thresholds", "primary_threshold"), self._float_spin(thresholds.get("primary_threshold", 0.85), 0.5, 0.999, 0.01, 3))
-        self._add(form, "Decoy Threshold", "ai.thresholds.decoy_threshold", ("ai", "thresholds", "decoy_threshold"), self._float_spin(thresholds.get("decoy_threshold", 0.85), 0.5, 0.999, 0.01, 3))
-        self._add(form, "Confirmation Frames", "ai.thresholds.confirmation_frames", ("ai", "thresholds", "confirmation_frames"), self._int_spin(thresholds.get("confirmation_frames", 5), 1, 30))
-        self._add(form, "Unknown Low", "ai.thresholds.unknown_low", ("ai", "thresholds", "unknown_low"), self._float_spin(thresholds.get("unknown_low", 0.45), 0, 1, 0.01, 3))
-        self._add(form, "Unknown High", "ai.thresholds.unknown_high", ("ai", "thresholds", "unknown_high"), self._float_spin(thresholds.get("unknown_high", 0.85), 0, 1, 0.01, 3))
-        self._add(form, "Signature Enabled", "ai.signatures.enabled", ("ai", "signatures", "enabled"), self._check(signatures.get("enabled", True), "Enable coded optical signature"))
-        self._add(form, "Blink Pattern", "ai.signatures.blink_pattern", ("ai", "signatures", "blink_pattern"), self._line(signatures.get("blink_pattern", "10110010"), "10110010"))
-        self._add(form, "Modulation Frequency (Hz)", "ai.signatures.modulation_freq_hz", ("ai", "signatures", "modulation_freq_hz"), self._float_spin(signatures.get("modulation_freq_hz", 12), 0.1, 240, 0.1, 3))
-        self._add(form, "Frequency Tolerance", "ai.signatures.freq_tolerance", ("ai", "signatures", "freq_tolerance"), self._float_spin(signatures.get("freq_tolerance", 0.05), 0.001, 1, 0.005, 4))
-        self._add(form, "Expected Shape", "ai.signatures.expected_shape", ("ai", "signatures", "expected_shape"), self._line(signatures.get("expected_shape", "square"), "square"))
-        self._add(form, "Signature Min Size", "ai.signatures.size_range_px.0", ("ai", "signatures", "size_range_px", 0), self._int_spin((signatures.get("size_range_px") or [5, 20])[0], 1, 100))
-        self._add(form, "Signature Max Size", "ai.signatures.size_range_px.1", ("ai", "signatures", "size_range_px", 1), self._int_spin((signatures.get("size_range_px") or [5, 20])[1], 1, 100))
-        self._add(form, "Persistence Frames", "ai.signatures.persistence_frames", ("ai", "signatures", "persistence_frames"), self._int_spin(signatures.get("persistence_frames", 5), 1, 100))
-        self._add(form, "AI Detection Confidence", "ai.detection_threshold", ("ai", "detection_threshold"), self._float_spin(ai.get("detection_threshold", 0.45), 0, 1, 0.01, 3))
-        self._add(form, "AI Search Ranking", "ai.search_ranking", ("ai", "search_ranking"), self._check(ai.get("search_ranking", True), "Use predicted position, velocity, decoy memory, and disturbance-aware ranking"))
-        self._add(form, "Appearance Weight", "ai.weights.appearance", ("ai", "weights", "appearance"), self._float_spin(weights.get("appearance", 0.2), 0, 1, 0.01, 3))
-        self._add(form, "Motion Weight", "ai.weights.motion", ("ai", "weights", "motion"), self._float_spin(weights.get("motion", 0.2), 0, 1, 0.01, 3))
-        self._add(form, "Temporal Weight", "ai.weights.temporal", ("ai", "weights", "temporal"), self._float_spin(weights.get("temporal", 0.2), 0, 1, 0.01, 3))
-        self._add(form, "Signature Weight", "ai.weights.signature", ("ai", "weights", "signature"), self._float_spin(weights.get("signature", 0.25), 0, 1, 0.01, 3))
-        self._add(form, "Estimator Weight", "ai.weights.estimator", ("ai", "weights", "estimator"), self._float_spin(weights.get("estimator", 0.15), 0, 1, 0.01, 3))
-        self._add(form, "Candidate Model", "ai.candidate_model_path", ("ai", "candidate_model_path"), self._line(ai.get("candidate_model_path", ""), "models/candidate_classifier/best.onnx (empty = heuristic)"))
-        self._add(form, "Identity Model", "ai.identity_model_path", ("ai", "identity_model_path"), self._line(ai.get("identity_model_path", ""), "models/identity_classifier/best.onnx (empty = heuristic voter)"))
+        self._add(runtime, "AI Identification Enabled", "ai.enabled", ("ai", "enabled"), self._check(ai.get("enabled", True), "Master switch for this mode"))
+        self._add(runtime, "Fallback on AI Failure", "ai.fallback_on_failure", ("ai", "fallback_on_failure"), self._check(ai.get("fallback_on_failure", True), "Raise uncertainty and hold search instead of locking blindly"))
+        self._add(runtime, "Track History Length", "ai.sequence_length", ("ai", "sequence_length"), self._int_spin(ai.get("sequence_length", 25), 10, 100, 1, "frames"),
+                  "Observations per track fed to the GRU (20–30 recommended).")
+        self._add(runtime, "Inference Timeout", "ai.inference_timeout_ms", ("ai", "inference_timeout_ms"), self._int_spin(ai.get("inference_timeout_ms", 40), 1, 5000, 5, "ms"),
+                  "Hard budget per classifier before fallback.")
+        self._add(runtime, "Candidate Model File", "ai.candidate_model_path", ("ai", "candidate_model_path"), self._line(ai.get("candidate_model_path", ""), "models/candidate_classifier/best.onnx (empty = heuristic)"))
+        self._add(runtime, "Identity Model File", "ai.identity_model_path", ("ai", "identity_model_path"), self._line(ai.get("identity_model_path", ""), "models/identity_classifier/best.onnx (empty = heuristic voter)"))
+
+        ident = self._group(
+            body_layout,
+            "9 · Identity Decision",
+            "A track becomes PRIMARY only after holding above threshold for N consecutive frames.",
+        )
+        self._add(ident, "Primary Confidence Threshold", "ai.thresholds.primary_threshold", ("ai", "thresholds", "primary_threshold"), self._float_spin(thresholds.get("primary_threshold", 0.85), 0.5, 0.999, 0.01, 3),
+                  "Identity score needed to start confirmation (default 0.85).")
+        self._add(ident, "Decoy Rejection Threshold", "ai.thresholds.decoy_threshold", ("ai", "thresholds", "decoy_threshold"), self._float_spin(thresholds.get("decoy_threshold", 0.85), 0.5, 0.999, 0.01, 3),
+                  "Decoy score that rejects a track (default 0.85).")
+        self._add(ident, "Confirmation Frames", "ai.thresholds.confirmation_frames", ("ai", "thresholds", "confirmation_frames"), self._int_spin(thresholds.get("confirmation_frames", 5), 1, 30, 1, "frames"),
+                  "Consecutive frames above threshold before PRIMARY_CONFIRMED. Higher = fewer false locks, slower acquisition.")
+        self._add(ident, "Unknown Band — Low", "ai.thresholds.unknown_low", ("ai", "thresholds", "unknown_low"), self._float_spin(thresholds.get("unknown_low", 0.45), 0, 1, 0.01, 3),
+                  "Below this with no strong class = UNKNOWN.")
+        self._add(ident, "Unknown Band — High", "ai.thresholds.unknown_high", ("ai", "thresholds", "unknown_high"), self._float_spin(thresholds.get("unknown_high", 0.85), 0, 1, 0.01, 3))
+        self._add(ident, "Detection Confidence Cutoff", "ai.detection_threshold", ("ai", "detection_threshold"), self._float_spin(ai.get("detection_threshold", 0.45), 0, 1, 0.01, 3),
+                  "Stage-1 scores below this are treated as noise.")
+        self._add(ident, "AI Search Ranking", "ai.search_ranking", ("ai", "search_ranking"), self._check(ai.get("search_ranking", True), "Rank search regions by prediction, velocity, decoy memory and disturbances"))
+
+        sig = self._group(
+            body_layout,
+            "10 · Optical Signature",
+            "The unique observable identity. Brightness alone never confirms a target.",
+        )
+        self._add(sig, "Signature Check Enabled", "ai.signatures.enabled", ("ai", "signatures", "enabled"), self._check(signatures.get("enabled", True), "Master switch for coded identity"))
+        self._add(sig, "Blink Code", "ai.signatures.blink_pattern", ("ai", "signatures", "blink_pattern"), self._line(signatures.get("blink_pattern", "10110010"), "10110010"),
+                  "Primary on/off code per frame; decoys use a different code.")
+        self._add(sig, "Modulation Frequency", "ai.signatures.modulation_freq_hz", ("ai", "signatures", "modulation_freq_hz"), self._float_spin(signatures.get("modulation_freq_hz", 12), 0.1, 240, 0.1, 2, "Hz"))
+        self._add(sig, "Frequency Tolerance", "ai.signatures.freq_tolerance", ("ai", "signatures", "freq_tolerance"), self._float_spin(signatures.get("freq_tolerance", 0.05), 0.001, 1, 0.005, 4, "±"),
+                  "Allowed fractional error around the modulation frequency.")
+        self._add(sig, "Expected Size — Min", "ai.signatures.size_range_px.0", ("ai", "signatures", "size_range_px", 0), self._int_spin((signatures.get("size_range_px") or [5, 20])[0], 1, 100, 1, "px"))
+        self._add(sig, "Expected Size — Max", "ai.signatures.size_range_px.1", ("ai", "signatures", "size_range_px", 1), self._int_spin((signatures.get("size_range_px") or [5, 20])[1], 1, 100, 1, "px"))
+        self._add(sig, "Persistence Required", "ai.signatures.persistence_frames", ("ai", "signatures", "persistence_frames"), self._int_spin(signatures.get("persistence_frames", 5), 1, 100, 1, "frames"),
+                  "Frames a candidate must remain visible to count as stable.")
+
+        weights_form = self._group(
+            body_layout,
+            "11 · Identity Evidence Weights",
+            "How the five evidence streams combine. Must sum to 1.00.",
+        )
+        self._add(weights_form, "Appearance Weight", "ai.weights.appearance", ("ai", "weights", "appearance"), self._float_spin(weights.get("appearance", 0.2), 0, 1, 0.01, 3))
+        self._add(weights_form, "Motion Weight", "ai.weights.motion", ("ai", "weights", "motion"), self._float_spin(weights.get("motion", 0.2), 0, 1, 0.01, 3))
+        self._add(weights_form, "Temporal Weight", "ai.weights.temporal", ("ai", "weights", "temporal"), self._float_spin(weights.get("temporal", 0.2), 0, 1, 0.01, 3))
+        self._add(weights_form, "Signature Weight", "ai.weights.signature", ("ai", "weights", "signature"), self._float_spin(weights.get("signature", 0.25), 0, 1, 0.01, 3))
+        self._add(weights_form, "Estimator Weight", "ai.weights.estimator", ("ai", "weights", "estimator"), self._float_spin(weights.get("estimator", 0.15), 0, 1, 0.01, 3))
 
         primary_form = self._group(
             body_layout,
-            "AI Primary Profile",
-            "Evaluator-facing optical and geometric identity evidence. These fields are private to the AI profile.",
+            "12 · Decoys",
+            "Decoy candidates the AI must reject (wrong blink code / frequency).",
         )
-        self._add(primary_form, "Primary Shape", "primary_target.shape", ("primary_target", "shape"), self._combo(["square", "circle", "gaussian", "cross"], primary.get("shape", "square")))
-        self._add(primary_form, "Primary Size (px)", "primary_target.size_px", ("primary_target", "size_px"), self._int_spin(primary.get("size_px", 10), 1, 100))
-        self._add(primary_form, "Brightness Min", "primary_target.brightness_range.0", ("primary_target", "brightness_range", 0), self._int_spin((primary.get("brightness_range") or [180, 255])[0], 0, 255))
-        self._add(primary_form, "Brightness Max", "primary_target.brightness_range.1", ("primary_target", "brightness_range", 1), self._int_spin((primary.get("brightness_range") or [180, 255])[1], 0, 255))
-        self._add(primary_form, "Allowed Motion (JSON)", "primary_target.allowed_motion", ("primary_target", "allowed_motion"), self._json_editor(primary.get("allowed_motion", ["straight", "circular", "figure_eight", "random"]), '["straight","circular"]'))
-        self._add(primary_form, "Max Speed (px/frame)", "primary_target.max_speed_px_per_frame", ("primary_target", "max_speed_px_per_frame"), self._float_spin(primary.get("max_speed_px_per_frame", 20), 0, 100, 0.5, 2))
-        self._add(primary_form, "Primary Optical Signature (JSON)", "primary_target.optical_signature", ("primary_target", "optical_signature"), self._json_editor(optical, '{"blink_pattern":"10110010"}'))
-        self._add(primary_form, "Decoys Enabled", "decoys.enabled", ("decoys", "enabled"), self._check(decoys.get("enabled", True), "Render decoy candidates"))
-        self._add(primary_form, "Decoy Count", "decoys.count", ("decoys", "count"), self._int_spin(decoys.get("count", 2), 0, 8))
-        self._add(primary_form, "Decoy Initial Positions (JSON)", "decoys.initial_positions", ("decoys", "initial_positions"), self._json_editor(decoys.get("initial_positions", []), "[[960,980],[1040,1020]]"))
-        self._add(primary_form, "Decoy Profiles (JSON)", "decoys.profiles", ("decoys", "profiles"), self._json_editor(profiles, '[{"type":"reflection","blink_pattern":"11100011"}]'))
+        self._add(primary_form, "Render Decoys", "decoys.enabled", ("decoys", "enabled"), self._check(decoys.get("enabled", True), "Show decoy candidates in the scene"))
+        self._add(primary_form, "Decoy Count", "decoys.count", ("decoys", "count"), self._int_spin(decoys.get("count", 2), 0, 8),
+                  "Number of simultaneous decoys.")
 
     # ------------------------------------------------------------------
     # Config <-> widgets
     # ------------------------------------------------------------------
     @staticmethod
     def _widget_value(widget: QWidget) -> Any:
+        if isinstance(widget, (_IntSlider, _FloatSlider)):
+            return widget.value()
         if isinstance(widget, QCheckBox):
             return widget.isChecked()
         if isinstance(widget, QComboBox):
@@ -632,9 +896,113 @@ class SystemControlPanel(QWidget):
         return None
 
     def _on_conditional_changed(self) -> None:
-        # The JSON editors are always visible; the explanatory text makes the
-        # mode explicit without hiding parameters that may be needed later.
-        return
+        """Enable only controls that are meaningful for the current choices."""
+        def set_enabled(name: str, enabled: bool) -> None:
+            entry = self.controls.get(name)
+            if entry is not None:
+                entry[1].setEnabled(bool(enabled))
+
+        def checked(name: str, default: bool = False) -> bool:
+            entry = self.controls.get(name)
+            if entry is None:
+                return default
+            widget = entry[1]
+            return bool(widget.isChecked()) if isinstance(widget, QCheckBox) else default
+
+        def current(name: str, default: str = "") -> str:
+            entry = self.controls.get(name)
+            if entry is None:
+                return default
+            widget = entry[1]
+            return widget.currentText() if isinstance(widget, QComboBox) else default
+
+        input_mode = current("experiment.input_mode", "SYNTHETIC")
+        video_mode = input_mode.upper() == "VIDEO"
+        set_enabled("experiment.video_path", video_mode)
+        set_enabled("experiment.bypass_virtual_ptz", video_mode)
+        set_enabled("camera.video_centre_offset_x", video_mode)
+        set_enabled("camera.video_centre_offset_y", video_mode)
+
+        shape = current("target.shape", "square")
+        trajectory = current("target.trajectory", "circular")
+        initial_mode = current("target.initial_mode", "random")
+        set_enabled("target.custom_polygon", shape == "user-defined")
+        set_enabled("target.custom_trajectory_file", trajectory == "user-defined")
+        set_enabled("target.initial_x", initial_mode not in {"random", "centre", "center"})
+        set_enabled("target.initial_y", initial_mode not in {"random", "centre", "center"})
+        set_enabled("target.angle_deg", trajectory in {"straight", "user-defined"})
+        set_enabled("target.radius", trajectory in {"circular", "figure_eight"})
+
+        gaussian_on = checked("noise.gaussian_enabled")
+        salt_pepper_on = checked("noise.salt_pepper_enabled")
+        set_enabled("noise.gaussian_std", gaussian_on)
+        set_enabled("noise.salt_pepper_prob", salt_pepper_on)
+
+        gradient_on = checked("environment.gradient_enabled")
+        for name in (
+            "environment.gradient_type",
+            "environment.gradient_top",
+            "environment.gradient_bottom",
+            "environment.gradient_angle",
+        ):
+            set_enabled(name, gradient_on)
+
+        stars_on = checked("environment.stars_enabled")
+        for name in (
+            "environment.stars_density",
+            "environment.stars_brightness",
+            "environment.stars_min_mag",
+            "environment.stars_max_mag",
+            "environment.stars_twinkle",
+            "environment.stars_seed",
+        ):
+            set_enabled(name, stars_on)
+
+        vignette_on = checked("environment.vignetting_enabled")
+        for name in (
+            "environment.vignetting_strength",
+            "environment.vignetting_radius",
+            "environment.vignetting_falloff",
+            "environment.vignetting_center_x",
+            "environment.vignetting_center_y",
+        ):
+            set_enabled(name, vignette_on)
+
+        if self.is_ai_panel:
+            ai_on = checked("ai.enabled", True)
+            signature_on = ai_on and checked("ai.signatures.enabled", True)
+            for name in (
+                "ai.fallback_on_failure",
+                "ai.sequence_length",
+                "ai.inference_timeout_ms",
+                "ai.candidate_model_path",
+                "ai.identity_model_path",
+                "ai.thresholds.primary_threshold",
+                "ai.thresholds.decoy_threshold",
+                "ai.thresholds.confirmation_frames",
+                "ai.thresholds.unknown_low",
+                "ai.thresholds.unknown_high",
+                "ai.detection_threshold",
+                "ai.search_ranking",
+                "ai.signatures.enabled",
+                "ai.weights.appearance",
+                "ai.weights.motion",
+                "ai.weights.temporal",
+                "ai.weights.signature",
+                "ai.weights.estimator",
+                "decoys.enabled",
+                "decoys.count",
+            ):
+                set_enabled(name, ai_on)
+            for name in (
+                "ai.signatures.blink_pattern",
+                "ai.signatures.modulation_freq_hz",
+                "ai.signatures.freq_tolerance",
+                "ai.signatures.size_range_px.0",
+                "ai.signatures.size_range_px.1",
+                "ai.signatures.persistence_frames",
+            ):
+                set_enabled(name, signature_on)
 
     def set_config(self, config: Dict[str, Any]) -> None:
         self.cfg = copy.deepcopy(config)
@@ -642,7 +1010,10 @@ class SystemControlPanel(QWidget):
             if path == ("__preset__",):
                 continue
             value = _get_path(self.cfg, path, None)
-            if isinstance(widget, QComboBox):
+            if isinstance(widget, (_IntSlider, _FloatSlider)):
+                if value is not None:
+                    widget.setValue(value)
+            elif isinstance(widget, QComboBox):
                 if value is not None:
                     text = str(value)
                     if widget.findText(text) < 0:
@@ -677,7 +1048,6 @@ class SystemControlPanel(QWidget):
                 value = None
             _set_path(result, path, value)
 
-        # Reconcile the two target position fields with the three-state UI.
         mode = _get_path(result, ("target", "initial_mode"), "random")
         if mode in {"random"}:
             _set_path(result, ("target", "initial_pos"), None)
@@ -694,8 +1064,6 @@ class SystemControlPanel(QWidget):
                 [int(_get_path(result, ("target", "initial_pos", 0), 0)), int(_get_path(result, ("target", "initial_pos", 1), 0))],
             )
 
-        # Keep both AI signature representations in sync for the World and
-        # the identity scorer, but only the AI panel owns these values.
         if self.is_ai_panel:
             ai_enabled = bool(_get_path(result, ("ai", "enabled"), False))
             _set_path(result, ("ai", "enabled"), ai_enabled)
@@ -706,7 +1074,6 @@ class SystemControlPanel(QWidget):
         else:
             _set_path(result, ("ai", "enabled"), False)
 
-        # Validate before the wrapper emits it to the live application.
         from ..config.schema import validate_config
         return validate_config(result)
 
@@ -720,7 +1087,7 @@ class SystemControlPanel(QWidget):
     def _on_preset_changed(self, name: str) -> None:
         info = self.preset_infos.get(name)
         if info is None:
-            self.preset_desc.setText("Custom: edit this system portion independently, then use Save As.")
+            self.preset_desc.setText("Custom: edit this mode independently, then use Save As.")
             self.preset_expected.hide()
             return
         mode = "AI ON" if info.is_ai_preset else "AI OFF"
@@ -757,7 +1124,11 @@ class SystemControlPanel(QWidget):
 
     def set_ai_enabled(self, enabled: bool) -> None:
         if self.is_ai_panel:
-            self.ai_enabled_check.setChecked(bool(enabled))
+            widget = self.ai_enabled_check
+            if isinstance(widget, (_IntSlider, _FloatSlider)):
+                return
+            if isinstance(widget, QCheckBox):
+                widget.setChecked(bool(enabled))
 
 
 __all__ = ["SystemControlPanel"]

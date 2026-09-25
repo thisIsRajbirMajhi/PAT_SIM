@@ -233,13 +233,6 @@ class IdentityClassifier:
                 "track_id": track.track_id,
             }
             sample = build_sequence_from_track(td, seq_len=self.seq_len)
-            if sample is not None:
-                # fill neutral IMM evidence the runtime tracker supplies but
-                # the training-free track dict above lacks (defaults 0.33/0.33/
-                # 0.34 in build_sequence_from_track differ from training's
-                # 0.6/0.25/0.15 constant — keep parity with training data)
-                n_valid = int(sample.mask.sum())
-                sample.sequence[25 - n_valid:, 8:11] = (0.6, 0.25, 0.15)
             if sample is None:
                 return np.zeros((self.seq_len, TRAIN_DIM), dtype=np.float32), np.zeros((self.seq_len,), dtype=np.float32)
             return sample.sequence, sample.mask

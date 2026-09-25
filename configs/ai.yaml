@@ -19,6 +19,13 @@ ai:
     unknown_low: 0.45
     unknown_high: 0.85
 
+  weights:                             # Plan §6 IdentityScore (must sum to 1.0)
+    appearance: 0.20
+    motion: 0.20
+    temporal: 0.20
+    signature: 0.25
+    estimator: 0.15
+
   signatures:
     enabled: true
     blink_pattern: "10110010"          # repeats per frame

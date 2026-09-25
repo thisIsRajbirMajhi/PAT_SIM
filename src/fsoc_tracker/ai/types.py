@@ -106,13 +106,29 @@ class IdentityResult:
     def signature_score(self) -> float:
         return self.evidence.optical_signature_score
 
+    @signature_score.setter
+    def signature_score(self, value: float) -> None:
+        self.evidence.optical_signature_score = float(value)
+
     @property
     def motion_score(self) -> float:
         return self.evidence.motion_score
 
+    @motion_score.setter
+    def motion_score(self, value: float) -> None:
+        self.evidence.motion_score = float(value)
+
     @property
     def appearance_score(self) -> float:
         return self.evidence.appearance_score
+
+    @appearance_score.setter
+    def appearance_score(self, value: float) -> None:
+        self.evidence.appearance_score = float(value)
+
+    @property
+    def evidence_summary(self) -> str:
+        return "; ".join(self.evidence.reasons)
 
 
 @dataclass

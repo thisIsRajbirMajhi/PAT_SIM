@@ -107,16 +107,34 @@ def build_gru_sequence(track, seq_len: int = SEQ_LEN) -> Tuple[np.ndarray, np.nd
     for i in range(valid_len):
         idx = start + i
         out_idx = pad + i
-        # position (normalized to 0-1 by world? here use 640x480 approx)
+        # position (normalized to 0-1 by 640x480 approx)
         px, py = track.position_history[idx]
         vx, vy = track.velocity_history[idx] if idx < len(track.velocity_history) else (0, 0)
         br = track.brightness_history[idx] if idx < len(track.brightness_history) else 0
         innov = track.innovation_history[idx] if idx < len(track.innovation_history) else 0
         imm = track.imm_probs_history[idx] if idx < len(track.imm_probs_history) else (0.33, 0.33, 0.34)
-        # embedding placeholder — caller fills first 128 dims if available
-        seq[out_idx, 0:2] = [px / 640.0, py / 480.0]
-        seq[out_idx, 2:4] = [vx / 20.0, vy / 20.0]
-        # ... remaining dims filled by caller / training dataset builder
+        blink = 0
+        if idx < len(getattr(track, "blink_history", [])):
+            try:
+                blink = int(track.blink_history[idx])
+            except Exception:
+                blink = 0
+        # shape stability from size history up to idx
+        try:
+            sizes = list(getattr(track, "size_history", []))[: idx + 1]
+            shape_stab = float(np.clip(1.0 - float(np.std(sizes)) / 20.0, 0, 1)) if len(sizes) > 1 else 1.0
+        except Exception:
+            shape_stab = 1.0
+        # 139-dim layout: embedding 0:128 (filled by caller) + 11 motion/signal
+        # dims 128:130 pos, 130:132 vel, 132 brightness, 133 shape, 134 blink,
+        # 135 innovation, 136:139 IMM
+        seq[out_idx, 128:130] = [px / 640.0, py / 480.0]
+        seq[out_idx, 130:132] = [np.clip(vx / 20.0, -1, 1), np.clip(vy / 20.0, -1, 1)]
+        seq[out_idx, 132] = float(br) / 255.0
+        seq[out_idx, 133] = shape_stab
+        seq[out_idx, 134] = float(blink)
+        seq[out_idx, 135] = float(innov) / 50.0
+        seq[out_idx, 136:139] = [float(imm[0]), float(imm[1]), float(imm[2])]
         mask[out_idx] = 1.0
 
     return seq, mask

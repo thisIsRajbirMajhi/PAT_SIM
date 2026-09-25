@@ -42,9 +42,9 @@ class ThresholdConfig:
 def decide_identity(primary_p: float, decoy_p: float, unknown_p: float, cfg: ThresholdConfig) -> IdentityState:
     """Single-frame region decision (before temporal confirmation)."""
     if primary_p >= cfg.primary_threshold:
-        return IdentityState.CANDIDATE_FOUND  # caller promotes to PRIMARY_CONFIRMED after N frames
+        return IdentityState.IDENTITY_CHECKING  # caller promotes to PRIMARY_CONFIRMED after N frames
     if decoy_p >= cfg.decoy_threshold:
-        return IdentityState.CANDIDATE_FOUND  # caller promotes to DECOY_CONFIRMED after N frames
+        return IdentityState.IDENTITY_CHECKING  # caller promotes to DECOY_CONFIRMED after N frames
     if max(primary_p, decoy_p, unknown_p) < 0.55:
         return IdentityState.UNKNOWN
     return IdentityState.IDENTITY_CHECKING

@@ -76,9 +76,14 @@ class IdentityStateMachine:
             self._state[track_id] = IdentityState.DECOY_CONFIRMED
         elif max(primary_p, decoy_p, unknown_p) < 0.52 or unknown_p >= 0.55:
             self._state[track_id] = IdentityState.UNKNOWN
-        elif self._state[track_id] in (IdentityState.PRIMARY_CONFIRMED, IdentityState.DECOY_CONFIRMED):
-            # stay confirmed unless streak broken hard
-            pass
+        elif self._state[track_id] == IdentityState.PRIMARY_CONFIRMED:
+            # demote stale primary when evidence drops (prevents locked-on ghost)
+            if primary_p < self.primary_thr:
+                self._state[track_id] = IdentityState.UNKNOWN if unknown_p >= 0.55 else IdentityState.IDENTITY_CHECKING
+        elif self._state[track_id] == IdentityState.DECOY_CONFIRMED:
+            # demote stale decoy only on strong contrary evidence
+            if primary_p >= self.primary_thr and decoy_p < self.decoy_thr:
+                self._state[track_id] = IdentityState.IDENTITY_CHECKING
         else:
             self._state[track_id] = IdentityState.IDENTITY_CHECKING
 

@@ -1,9 +1,14 @@
+import logging
+
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QRect, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont, QBrush
 from .theme import COLORS
+
+
+LOGGER = logging.getLogger(__name__)
 
 # Convert BGR (cv2) tuple to QColor via RGB
 def bgr_to_qcolor(bgr):
@@ -36,7 +41,10 @@ class CameraView(QWidget):
         from PyQt5.QtWidgets import QSizePolicy
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
+        self.setStyleSheet(
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; "
+            "border-radius: 8px;"
+        )
 
     def set_ai_overlays(self, candidates, results):
         self._ai_candidates = list(candidates or [])
@@ -98,8 +106,9 @@ class CameraView(QWidget):
                     y = int(h * j / gh)
                     cv2.line(overlay, (0, y), (w, y), (210, 215, 225), 1, cv2.LINE_AA)
 
-            # --- reticle: precise crosshair with tick marks, not neon circles ---
+            # --- reticle: precise crosshair with a subtle range ring ---
             if self.show_reticle:
+                cv2.circle(overlay, (cx, cy), 26, (70, 100, 145), 1, cv2.LINE_AA)
                 # main cross
                 cv2.line(overlay, (cx - 18, cy), (cx - 6, cy), (37, 99, 235), 1, cv2.LINE_AA)
                 cv2.line(overlay, (cx + 6, cy), (cx + 18, cy), (37, 99, 235), 1, cv2.LINE_AA)
@@ -129,10 +138,24 @@ class CameraView(QWidget):
                     else:
                         col = (8, 179, 234)   # yellow candidate
                     bx, by, bw, bh = c.bbox
-                    cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), col, 1, cv2.LINE_AA)
+                    # Slightly heavier box and corner accents make small
+                    # candidates readable without covering the sensor image.
+                    cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), col, 2, cv2.LINE_AA)
+                    corner = max(4, min(10, int(min(bw, bh) * 0.35)))
+                    for x0, y0, sx, sy in (
+                        (bx, by, 1, 1),
+                        (bx + bw, by, -1, 1),
+                        (bx, by + bh, 1, -1),
+                        (bx + bw, by + bh, -1, -1),
+                    ):
+                        cv2.line(overlay, (x0, y0), (x0 + sx * corner, y0), col, 2, cv2.LINE_AA)
+                        cv2.line(overlay, (x0, y0), (x0, y0 + sy * corner), col, 2, cv2.LINE_AA)
                     # ID + score
                     label = f"ID{c.candidate_id} {st[:3]} {ident.primary_probability*100:.0f}%" if ident else f"ID{c.candidate_id}"
-                    cv2.putText(overlay, label, (bx, max(12, by - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1, cv2.LINE_AA)
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
+                    ly = max(th + 5, by - 4)
+                    cv2.rectangle(overlay, (bx, ly - th - 5), (bx + tw + 6, ly + 2), (12, 18, 28), -1)
+                    cv2.putText(overlay, label, (bx + 3, ly - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.38, col, 1, cv2.LINE_AA)
                     # centroid dot
                     x, y = int(round(c.centroid_px[0])), int(round(c.centroid_px[1]))
                     cv2.circle(overlay, (x, y), 4, col, -1, cv2.LINE_AA)
@@ -200,8 +223,23 @@ class CameraView(QWidget):
                     dy = int(-vy * scale)  # tilt inverted
                     if abs(dx) > 2 or abs(dy) > 2:
                         cv2.arrowedLine(overlay, (ex, ey), (ex + dx, ey + dy), col, 1, cv2.LINE_AA, tipLength=0.22)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    LOGGER.debug("Could not draw velocity vector: %s", exc)
+                # Fused error vector is useful in both AI and classical modes.
+                if self.show_reticle and (abs(ex - cx) > 2 or abs(ey - cy) > 2):
+                    cv2.line(overlay, (cx, cy), (ex, ey), col, 1, cv2.LINE_AA)
+                    mx, my = (cx + ex) // 2, (cy + ey) // 2
+                    err = np.hypot(ex - cx, ey - cy)
+                    cv2.putText(
+                        overlay,
+                        f"FUSED {err:.0f}px",
+                        (mx + 6, my - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.36,
+                        col,
+                        1,
+                        cv2.LINE_AA,
+                    )
 
         self._rgb = overlay
         self.update()
@@ -222,8 +260,9 @@ class CameraView(QWidget):
             painter.drawText(r, Qt.AlignCenter, "No frame — press RUN")
             return
 
-        # header bar inside shell
-        header_h = 28
+        # Header bar inside shell.  The right-side metadata stays outside the
+        # sensor image so it never competes with candidate labels.
+        header_h = 32
         header_rect = QRect(1, 1, self.width() - 2, header_h)
         painter.fillRect(header_rect, QColor(COLORS["faint"]))
         painter.setPen(QPen(QColor(COLORS["border"]), 1))
@@ -238,6 +277,25 @@ class CameraView(QWidget):
         painter.drawText(header_rect.adjusted(10, 0, 0, 0), Qt.AlignVCenter, self.title)
 
         meta = self._meta
+        header_meta = [
+            str(meta.get("res", "")),
+            str(meta.get("fov", "")),
+            str(meta.get("fps", "")),
+        ]
+        cursor_x = header_rect.right() - 8
+        f_meta = QFont("JetBrains Mono, Consolas", 7)
+        f_meta.setWeight(QFont.DemiBold)
+        painter.setFont(f_meta)
+        for text in reversed([v for v in header_meta if v]):
+            tw = painter.fontMetrics().horizontalAdvance(text) + 14
+            cursor_x -= tw
+            badge = QRect(cursor_x, header_rect.y() + 7, tw, 18)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#EFF6FF"))
+            painter.drawRoundedRect(badge, 5, 5)
+            painter.setPen(QColor("#1D4ED8"))
+            painter.drawText(badge, Qt.AlignCenter, text)
+            cursor_x -= 5
 
         # image area — now takes full remaining height (footer/legend removed per request)
         pad = 8
@@ -274,13 +332,28 @@ class CameraView(QWidget):
             col = QColor({"LOCKED":"#15803D","ACQUIRING":"#2563EB","SEARCHING":"#475569","CANDIDATE":"#475569","TEMP_LOST":"#A16207","REACQUIRING":"#A16207","FAILED":"#B91C1C"}.get(st, "#64748B"))
             self._draw_pill(painter, QRect(0,0,1,1), st, col, QColor("#FFFFFF"), align_right=True, anchor_x=ox+disp_w-6, anchor_y=oy+6)
 
+        # Compact sensor HUD card.  It gives the operator a stable reading
+        # surface while keeping the video itself visually quiet.
+        hud_lines = [
+            f"SENSOR  {meta.get('res', '—')}",
+            f"FRAME   {meta.get('frame_id', '—')}",
+            f"TRACKS  {len(self._ai_results) if self._ai_results else (len(self._ai_candidates) if self._ai_candidates else 1 if self._detection and self._detection.valid else 0)}",
+        ]
+        self._draw_info_card(
+            painter,
+            QRect(ox + 8, oy + 32, 126, 54),
+            hud_lines,
+            QColor(10, 18, 30, 205),
+            QColor("#DBEAFE"),
+        )
+
         # BL: image coordinates of detection/estimate
         if self._detection and self._detection.valid and self._detection.centroid_px:
             cx, cy = self._detection.centroid_px
             txt = f"x {cx:.1f}  y {cy:.1f}"
             self._draw_hud_text(painter, ox + 6, oy + disp_h - 18, txt, QColor(COLORS["text2"]), QColor(255,255,255,210))
 
-        # BR: scale bar (60px ~ 0.375° at 4°/640) — kept as in-image HUD
+        # BR: scale bar (60px ~ 0.375° at 4°/640)
         bar_px = int(60 * scale)
         bar_x = ox + disp_w - bar_px - 8
         bar_y = oy + disp_h - 8
@@ -291,7 +364,16 @@ class CameraView(QWidget):
         f_small = QFont("Inter", 6)
         painter.setFont(f_small)
         painter.drawText(QRect(bar_x - 28, bar_y - 10, 60, 10), Qt.AlignCenter, "60px")
-        # footer legend + timestamp removed per request
+        # Bottom-right processing state
+        footer_txt = "AI TRACKING" if self._ai_results else "CLASSICAL DETECTION"
+        self._draw_hud_text(
+            painter,
+            ox + disp_w - 142,
+            oy + disp_h - 26,
+            footer_txt,
+            QColor("#E2E8F0"),
+            QColor(15, 23, 42, 205),
+        )
 
     def _draw_pill(self, p, rect, text, bg, fg, align_right=False, anchor_x=None, anchor_y=None):
         fm = p.fontMetrics()
@@ -328,6 +410,22 @@ class CameraView(QWidget):
         p.setFont(f)
         p.drawText(r, Qt.AlignCenter, text)
 
+    def _draw_info_card(self, p, rect, lines, bg, fg):
+        p.setPen(QPen(QColor(148, 163, 184, 90), 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(rect, 6, 6)
+        font = QFont("JetBrains Mono, Consolas", 6)
+        font.setWeight(QFont.DemiBold)
+        p.setFont(font)
+        p.setPen(fg)
+        line_h = max(12, rect.height() // max(1, len(lines)))
+        for i, line in enumerate(lines):
+            p.drawText(
+                QRect(rect.x() + 8, rect.y() + 4 + i * line_h, rect.width() - 16, line_h),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                str(line),
+            )
+
 
 class WorldView(QWidget):
     def __init__(self, world_size=(2000, 2000), parent=None):
@@ -344,7 +442,10 @@ class WorldView(QWidget):
         from PyQt5.QtWidgets import QSizePolicy
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: 8px;")
+        self.setStyleSheet(
+            f"background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; "
+            "border-radius: 8px;"
+        )
 
     def update_state(self, camera, world_pos, trail=None, ai_tracks=None):
         if camera is not None:
@@ -385,8 +486,8 @@ class WorldView(QWidget):
         p.setBrush(QColor(COLORS["surface"]))
         p.drawRoundedRect(outer, 8, 8)
 
-        # header
-        header_h = 28
+        # Header with map identity and live context badges.
+        header_h = 32
         hdr = QRect(1, 1, self.width() - 2, header_h)
         p.fillRect(hdr, QColor(COLORS["faint"]))
         p.setPen(QPen(QColor(COLORS["border"]), 1))
@@ -397,6 +498,26 @@ class WorldView(QWidget):
         f_title.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
         p.setFont(f_title)
         p.drawText(hdr.adjusted(10, 0, 0, 0), Qt.AlignVCenter, "WORLD FOV")
+
+        badges = [
+            f"WORLD {int(self.world_w)}×{int(self.world_h)}",
+            "CAMERA FOOTPRINT",
+            f"TRACKS {len(self.ai_tracks_snapshot)}",
+        ]
+        right = hdr.right() - 8
+        badge_font = QFont("JetBrains Mono, Consolas", 7)
+        badge_font.setWeight(QFont.DemiBold)
+        p.setFont(badge_font)
+        for text in reversed(badges):
+            tw = p.fontMetrics().horizontalAdvance(text) + 14
+            right -= tw
+            badge = QRect(right, hdr.y() + 7, tw, 18)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#EFF6FF"))
+            p.drawRoundedRect(badge, 5, 5)
+            p.setPen(QColor("#1D4ED8"))
+            p.drawText(badge, Qt.AlignCenter, text)
+            right -= 5
 
         if self.camera_bounds is None:
             p.setPen(QColor(COLORS["muted"]))
@@ -415,7 +536,17 @@ class WorldView(QWidget):
         p.setBrush(QColor("#F8FAFC"))
         p.drawRoundedRect(world_rect, 6, 6)
 
-        # grid — light hairline, every 400px
+        # Grid — minor 200px guides plus stronger 400px guides.
+        minor_step = 200
+        p.setPen(QPen(QColor(226, 232, 240, 120), 1, Qt.DotLine))
+        for gx in range(minor_step, self.world_w, minor_step):
+            x = ox + gx * scale
+            p.drawLine(int(x), world_rect.top(), int(x), world_rect.bottom())
+        for gy in range(minor_step, self.world_h, minor_step):
+            y = oy + gy * scale
+            p.drawLine(world_rect.left(), int(y), world_rect.right(), int(y))
+
+        # Major grid and coordinate labels.
         p.setPen(QPen(QColor("#E2E8F0"), 1, Qt.SolidLine))
         step = 400
         for gx in range(step, self.world_w, step):
@@ -446,7 +577,16 @@ class WorldView(QWidget):
         p.drawText(arrow, Qt.AlignCenter, "N")
         p.setPen(QPen(QColor(COLORS["text2"]), 1))
         p.drawLine(arrow.center().x(), arrow.bottom() + 2, arrow.center().x(), arrow.bottom() + 10)
-        pts = [arrow.center() + p for p in [QPoint(0,-6), QPoint(-4,0), QPoint(4,0)] ]  # not used
+        # Map status card: a stable visual anchor for the operator.
+        self._draw_map_card(
+            p,
+            QRect(world_rect.left() + 8, world_rect.top() + 8, 160, 58),
+            [
+                "WORLD MAP  /  LIVE",
+                f"CAMERA  {int(self.world_w * scale):d}px view",
+                f"PRIMARY  {'VISIBLE' if self.world_pos else 'SEARCHING'}",
+            ],
+        )
 
         # trail — amber with fade (primary)
         if len(self.trail) > 1:
@@ -508,7 +648,9 @@ class WorldView(QWidget):
             lbl = f"CAM  {int(r-l)}×{int(b-t)}  pan {((self.camera_center[0]-self.world_w/2)/220):+.2f}° tilt {(-(self.camera_center[1]-self.world_h/2)/220):+.2f}°"
             fm = p.fontMetrics()
             tw = fm.horizontalAdvance(lbl) + 10
-            bg = QRect(frect.x(), frect.y() - 16, min(tw, frect.width()), 14)
+            label_w = max(72, min(tw, max(72, frect.width())))
+            label_y = max(world_rect.top() + 2, frect.y() - 16)
+            bg = QRect(frect.x(), label_y, label_w, 14)
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(37, 99, 235))
             p.drawRoundedRect(bg, 4, 4)
@@ -528,29 +670,42 @@ class WorldView(QWidget):
             p.drawLine(int(cx + 3), int(cy), int(cx + 9), int(cy))
             p.drawLine(int(cx), int(cy - 9), int(cx), int(cy - 3))
             p.drawLine(int(cx), int(cy + 3), int(cx), int(cy + 9))
+            p.setPen(QPen(QColor(COLORS["footprint"]), 1, Qt.DashLine))
+            p.drawEllipse(int(cx - 14), int(cy - 14), 28, 28)
 
-        # target — amber diamond with label
+        # target — state-aware diamond with a readable callout.
         if self.world_pos:
             tx = ox + self.world_pos[0] * scale
             ty = oy + self.world_pos[1] * scale
+            primary_confirmed = any(
+                "PRIMARY" in str(getattr(tr, "current_identity", ""))
+                for tr in self.ai_tracks_snapshot
+            )
+            target_fill = QColor("#16A34A") if primary_confirmed else QColor("#F59E0B")
+            target_edge = QColor("#166534") if primary_confirmed else QColor("#92400E")
             # diamond
-            p.setPen(QPen(QColor("#92400E"), 1.2))
-            p.setBrush(QColor("#F59E0B"))
+            p.setPen(QPen(target_edge, 1.4))
+            p.setBrush(target_fill)
             p.save()
             p.translate(int(tx), int(ty))
             p.rotate(45)
             p.drawRect(-6, -6, 12, 12)
             p.restore()
+            p.setPen(QPen(target_fill, 1))
+            p.drawEllipse(int(tx) - 12, int(ty) - 12, 24, 24)
             # callout
-            txt = f"BEACON  {self.world_pos[0]:.0f}, {self.world_pos[1]:.0f}"
+            txt = f"{'PRIMARY' if primary_confirmed else 'BEACON'}  {self.world_pos[0]:.0f}, {self.world_pos[1]:.0f}"
             fm = p.fontMetrics()
             tw = fm.horizontalAdvance(txt) + 10
-            cr = QRect(int(tx) + 10, int(ty) - 18, tw, 14)
+            callout_x = min(int(tx) + 10, world_rect.right() - tw - 4)
+            callout_x = max(world_rect.left() + 4, callout_x)
+            callout_y = max(world_rect.top() + 4, min(int(ty) - 18, world_rect.bottom() - 18))
+            cr = QRect(callout_x, callout_y, tw, 14)
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor("#FFFBEB"))
-            p.setPen(QPen(QColor("#F59E0B"), 1))
+            p.setBrush(QColor(255, 255, 255, 235))
+            p.setPen(QPen(target_fill, 1))
             p.drawRoundedRect(cr, 4, 4)
-            p.setPen(QColor("#92400E"))
+            p.setPen(target_edge)
             f_call = QFont("JetBrains Mono, Consolas", 6)
             p.setFont(f_call)
             p.drawText(cr, Qt.AlignCenter, txt)
@@ -571,9 +726,34 @@ class WorldView(QWidget):
         f_sc = QFont("Inter", 6)
         p.setFont(f_sc)
         p.drawText(QRect(bar_x, bar_y - 14, bar_w, 10), Qt.AlignCenter, "400 px")
-        # legend right
-        p.setPen(QColor(COLORS["subtle"]))
+        # Legend right with actual swatches instead of a text-only hint.
+        legend_items = [
+            (QColor("#D97706"), "target trail"),
+            (QColor("#2563EB"), "camera FOV"),
+            (QColor("#94A3B8"), "track trail"),
+        ]
         f_leg = QFont("Inter", 6)
-        f_leg.setLetterSpacing(QFont.AbsoluteSpacing, 0.3)
         p.setFont(f_leg)
-        p.drawText(footer, Qt.AlignRight | Qt.AlignVCenter, "— beacon trail • blue = camera FOV  •  + boresight")
+        lx = footer.right() - 245
+        for color, label in legend_items:
+            p.setPen(Qt.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(lx, footer.y() + 3, 6, 6)
+            p.setPen(QColor(COLORS["muted"]))
+            p.drawText(QRect(lx + 9, footer.y(), 70, 14), Qt.AlignVCenter, label)
+            lx += 78
+
+    def _draw_map_card(self, p, rect, lines):
+        p.setPen(QPen(QColor(148, 163, 184, 110), 1))
+        p.setBrush(QColor(255, 255, 255, 230))
+        p.drawRoundedRect(rect, 6, 6)
+        font = QFont("JetBrains Mono, Consolas", 6)
+        font.setWeight(QFont.DemiBold)
+        p.setFont(font)
+        for i, line in enumerate(lines):
+            p.setPen(QColor("#334155") if i else QColor("#1D4ED8"))
+            p.drawText(
+                QRect(rect.x() + 8, rect.y() + 5 + i * 16, rect.width() - 16, 14),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                str(line),
+            )

@@ -1,4 +1,12 @@
-from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame, QHBoxLayout
+from PyQt5.QtWidgets import (
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QScrollArea,
+    QFrame,
+    QHBoxLayout,
+)
 from PyQt5.QtCore import Qt
 from .dashboard import Dashboard
 from .theme import COLORS
@@ -18,7 +26,23 @@ class LiveDashboardWindow(QMainWindow):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        # headers/footers removed per request (58 fields title, Updates hint, Thresholds bar, statusBar)
+        header = QFrame()
+        header.setObjectName("TopBar")
+        header_lay = QHBoxLayout(header)
+        header_lay.setContentsMargins(12, 8, 12, 8)
+        header_lay.setSpacing(8)
+        title = QLabel("LIVE DASHBOARD")
+        title.setStyleSheet(
+            f"color:{COLORS['text']}; font-size:13px; font-weight:800; letter-spacing:0.7px;"
+        )
+        subtitle = QLabel("58 runtime fields · metrics update during the active run")
+        subtitle.setObjectName("Muted")
+        subtitle.setStyleSheet(f"color:{COLORS['muted']}; font-size:11px;")
+        header_lay.addWidget(title)
+        header_lay.addWidget(subtitle)
+        header_lay.addStretch()
+        root.addWidget(header)
+
         # scrollable dashboard grid — takes all remaining space
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -29,7 +53,7 @@ class LiveDashboardWindow(QMainWindow):
         root.addWidget(scroll, 1)
 
         self.setCentralWidget(central)
-        self.statusBar().hide()
+        self.statusBar().showMessage("Dashboard ready")
 
     def closeEvent(self, event):
         # hide instead of destroy so MainWindow keeps reference and can reshow

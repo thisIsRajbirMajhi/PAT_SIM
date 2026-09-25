@@ -1,7 +1,11 @@
+import logging
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QScrollArea, QWidget, QPushButton, QGridLayout
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from .theme import COLORS
+
+
+LOGGER = logging.getLogger(__name__)
 import os
 
 class BenchmarkResultDialog(QDialog):
@@ -250,5 +254,5 @@ class BenchmarkResultDialog(QDialog):
                 subprocess.Popen(["open", path])
             else:
                 subprocess.Popen(["xdg-open", path])
-        except Exception:
-            pass
+        except Exception as exc:
+            LOGGER.warning("Could not open benchmark output folder %s: %s", path, exc)
