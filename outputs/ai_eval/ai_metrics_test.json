@@ -1,6 +1,6 @@
 {
   "split": "test",
-  "evaluated_at": "2026-09-25T10:42:10Z",
+  "evaluated_at": "2026-09-25T10:45:53Z",
   "candidate_precision": 0.657258064516129,
   "candidate_recall": 1.0,
   "candidate_tp": 489,
@@ -9,12 +9,12 @@
   "total_patches": 744,
   "beacon_patches": 489,
   "hard_negative_rate": 0.09811827956989247,
-  "primary_precision": 0.0,
-  "primary_recall": 0.0,
+  "primary_precision": 1.0,
+  "primary_recall": 1.0,
   "decoy_rejection_rate": 1.0,
   "false_lock_rate": 0.0,
   "identity_switches": 0,
-  "unknown_rate": 0.07142857142857142,
+  "unknown_rate": 0.0,
   "total_sequences": 14,
   "latency_ms": {
     "candidate_ms": 2.1,

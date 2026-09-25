@@ -172,11 +172,16 @@ No phase after Gate 1 starts implementation without the prior gate's approval wh
 
 ---
 
-## Current scaffold status
+## Current status (all phases implemented)
 
 - ✅ `src/fsoc_tracker/ai/` package with `types/features/signatures/candidate_model/identity_model/inference/thresholds/calibration/training/evaluation`
 - ✅ `configs/ai.yaml`, `training.yaml`, `identity_signatures.yaml`, `model_thresholds.yaml`
 - ✅ `scripts/generate_training_data.py`, `train_candidate_classifier.py`, `train_identity_model.py`, `evaluate_ai_models.py`, `calibrate_thresholds.py`, `export_models.py`
 - ✅ `docs/ai_architecture.md`, `training_pipeline.md`, `identity_and_decoys.md`, `model_evaluation.md`, `deployment.md`
 - ✅ `tests/unit/test_ai_types.py`, `tests/unit/test_ai_inference.py`, `tests/integration/test_ai_pipeline.py`, `tests/scenarios/test_ai_decoy_rejection.py`, `tests/model/test_ai_metrics.py`
-- ⏳ Next after Gate 1 approval: wire multi-candidate detection + track manager + wire `ai.enabled` into `ui/app.py` tick loop (gated behind config flag).
+- ✅ Phase 2-8 wired: multi-candidate detection + TrackManager + identity state machine + `ai.enabled` path in `ui/app.py` tick loop + EKF/PID safety integration
+- ✅ Phase 4-5 training loops implemented (MobileNetV3-Small + GRU, focal/weighted losses, safety-aware model selection)
+- ✅ Real dataset generated: 100 seeds (train 1-70 / val 71-85 / test 86-100), ~4.8k patches + 85 track sequences incl. hard negatives
+- ✅ Models trained, calibrated and exported to ONNX (`models/*/​*.onnx`) — loaded by the runtime inference path when `ai.candidate_model_path` / `ai.identity_model_path` are configured
+- ✅ Independent test-split metrics: primary precision/recall 1.0/1.0, decoy rejection 1.0, false-lock 0.0 (see `outputs/ai_eval/ai_metrics_test.json`)
+- Remaining (Gate 4): full-scale dataset regeneration + retraining as hardware/data volume grows; larger val/test sequence pools; extended ablation automation
