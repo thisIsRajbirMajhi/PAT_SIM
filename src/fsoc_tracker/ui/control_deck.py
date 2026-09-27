@@ -62,20 +62,15 @@ class ControlDeck(QDialog):
                 self._preset_meta_map[pretty] = data.get("preset_meta", {})
             except:
                 self._preset_meta_map[pretty] = {}
-        # Ensure built-ins are present even if files missing (legacy)
-        for builtin in ["Clean Baseline","High Noise","Platform Jitter","Low Light / Fog","Stars Vignetting","Multi Target","Benchmark Video"]:
-            if builtin not in display_names:
-                display_names.append(builtin)
-        if "Custom" not in display_names:
-            display_names.append("Custom")
+        # Only file-based presets from configs/*.yaml are listed (no built-in fallbacks)
+        if not display_names:
+            display_names.append("(No presets found)")
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(display_names)
-        # Default to P01 Clean Baseline if available
+        # Default to first preset if available
         try:
-            for cand in ["P01 - Clean Baseline", "P01 — Clean Baseline", "Clean Baseline"]:
-                if cand in display_names:
-                    self.preset_combo.setCurrentIndex(display_names.index(cand))
-                    break
+            if display_names and display_names[0] != "(No presets found)":
+                self.preset_combo.setCurrentIndex(0)
         except:
             pass
         self.preset_desc = QLabel("Preset loads full Sr.1-15 + disturbances + environment. Click Load then Apply.")
@@ -140,11 +135,8 @@ class ControlDeck(QDialog):
                         self.preset_expected.hide()
                 except:
                     self.preset_expected.hide()
-        elif name == "Custom":
-            self.preset_desc.setText("Custom: current deck values. Save As to create new preset.")
-            self.preset_expected.hide()
         else:
-            self.preset_desc.setText(f"Built-in preset: {name} — staged, click Load.")
+            self.preset_desc.setText("No preset file — select a preset from configs/*.yaml.")
             self.preset_expected.hide()
 
     def _load_preset(self):
@@ -173,29 +165,7 @@ class ControlDeck(QDialog):
                     pass
                 QMessageBox.information(self,"Preset Loaded", msg)
                 return
-            # Fallback built-ins (for backward compat if file missing)
-            if name=="Clean Baseline":
-                self._set_fields(atmo="clear", gauss=0, spp=0, jitter=0, platform="none")
-            elif name=="High Noise":
-                self._set_fields(atmo="clear", gauss=12, spp=0.02, jitter=6, platform="linear")
-            elif name=="Platform Jitter":
-                self._set_fields(atmo="clear", gauss=4, spp=0, jitter=14, platform="linear")
-            elif name=="Low Light / Fog":
-                self._set_fields(atmo="fog", gauss=5, spp=0, jitter=4, platform="none")
-            elif name=="Stars Vignetting":
-                # Toggle stars/vignetting via cfg then refresh
-                self.cfg["environment"]["stars_enabled"] = True
-                self.cfg["environment"]["vignetting_enabled"] = True
-                self.cfg["environment"]["gradient_enabled"] = True
-                self._refresh_all_fields()
-            elif name=="Multi Target":
-                self.cfg["target"]["count"] = 3
-                self._refresh_all_fields()
-            elif name=="Benchmark Video":
-                self.cfg["experiment"]["input_mode"] = "VIDEO"
-                self.cfg["experiment"]["video_path"] = "data/input_videos/test_beacon.mp4"
-                self._refresh_all_fields()
-            QMessageBox.information(self,"Preset","Preset fields staged. Click Apply to commit.")
+            QMessageBox.warning(self, "Preset", "Preset file not found.")
         except Exception as e:
             QMessageBox.warning(self,"Preset Load Failed", str(e))
 

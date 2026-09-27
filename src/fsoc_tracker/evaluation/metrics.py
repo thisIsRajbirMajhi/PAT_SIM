@@ -15,7 +15,7 @@ class MetricsCollector:
         self._last_state = None
         self.proc_times = []
         self.errors = []
-        self.t_acq_start = None
+        self.t_acq_start = time.perf_counter()
         self.saturation_count = 0
         self.loss_count = 0
         self.acq_count = 0
@@ -54,7 +54,9 @@ class MetricsCollector:
             # target outside FOV -> no error, count as loss
             pass
 
-        # acquisition timing
+        # acquisition timing (t_acq_start lazily initialized: update() is valid without start_run())
+        if self.t_acq_start is None:
+            self.t_acq_start = time.perf_counter()
         if not self._acquired and estimate.tracking_state.value == "LOCKED":
             self.acquisition_time = time.perf_counter() - self.t_acq_start
             self._acquired = True

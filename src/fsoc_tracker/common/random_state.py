@@ -1,9 +1,7 @@
-import random
-import numpy as np
+"""Backward-compat shim: canonical implementation lives in common/random/.
 
-def seed_all(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
+Use `from .random import seed_all, make_rng` in new code.
+"""
+from .random import make_rng, seed_all
 
-def make_rng(seed: int):
-    return np.random.default_rng(seed)
+__all__ = ["seed_all", "make_rng"]

@@ -1,10 +1,10 @@
-import time, numpy as np, cv2
+import numpy as np
+import cv2
 from .base import FrameSource
 from ..common.types import Frame, GroundTruth
 from ..simulation.world import World
-from ..simulation.virtual_camera import VirtualCamera
-from ..simulation.platform_motion import PlatformMotion
-from ..simulation.noise import apply_gaussian, apply_salt_pepper, apply_poisson, apply_jitter, apply_atmosphere
+from ..camera import VirtualCamera
+from ..disturbances import DisturbancePipeline, PlatformMotion
 
 class SyntheticSource(FrameSource):
     def __init__(self, cfg, seed=42):
@@ -27,11 +27,13 @@ class SyntheticSource(FrameSource):
         self.rng = np.random.default_rng(seed)
         self.frame_id = 0
         self._fps = float(cfg["camera"]["fps"])
-        # disturbance settings
-        self.jitter = float(cfg["camera"].get("jitter_px",0))
-        self.atmo_type = cfg["atmosphere"].get("type","clear")
-        self.atmo_strength = float(cfg["atmosphere"].get("strength",0))
-        self.noise_cfg = cfg["noise"]
+        # shared disturbances: single canonical pipeline (atmosphere -> noise -> jitter)
+        self.pipeline = DisturbancePipeline(cfg)
+        # legacy mirrors (kept for backward compat; canonical state lives in self.pipeline)
+        self.jitter = self.pipeline.jitter
+        self.atmo_type = self.pipeline.atmo_type
+        self.atmo_strength = self.pipeline.atmo_strength
+        self.noise_cfg = self.pipeline.noise_cfg
 
     @property
     def fps(self): return self._fps
@@ -56,6 +58,13 @@ class SyntheticSource(FrameSource):
             self.camera._update_center()
         self.frame_id = 0
         self.rng = np.random.default_rng(self.seed)
+        # platform is stateful (t/offset/rng) — must restart too, else reset is not reproducible
+        self.platform = PlatformMotion(self.cfg, seed=self.seed)
+        self.pipeline.update_config(self.cfg)
+        self.jitter = self.pipeline.jitter
+        self.atmo_type = self.pipeline.atmo_type
+        self.atmo_strength = self.pipeline.atmo_strength
+        self.noise_cfg = self.pipeline.noise_cfg
 
     def apply_camera_command(self, pan_rate, tilt_rate, dt):
         self.camera.apply_command(pan_rate, tilt_rate, dt)
@@ -72,25 +81,19 @@ class SyntheticSource(FrameSource):
         # Add to world_pos for ground truth visibility check? But easier: keep world_pos, but perturb camera viewport
         # We'll perturb by moving camera center opposite to platform motion
         if self.platform.type != "none":
-            # small nudge to camera to simulate platform vibration
-            self.camera.center_world[0] += pdx
-            self.camera.center_world[1] += pdy
+            # platform ego-motion must persist via pan/tilt: center_world is
+            # recomputed from pan/tilt inside _update_center(), so nudging it
+            # directly is discarded (platform was silently a no-op)
+            self.camera.pan += pdx / self.camera.px_per_deg
+            self.camera.tilt -= pdy / self.camera.px_per_deg
             self.camera._update_center()
 
         world_img = self.world.render_world(world_pos)
         # extract viewport
         frame_img = self.camera.extract_viewport(world_img)
 
-        # apply atmosphere then noise then jitter pipeline per spec
-        frame_img = apply_atmosphere(frame_img, self.atmo_type, self.atmo_strength)
-        if self.noise_cfg.get("gaussian_enabled") and self.noise_cfg.get("gaussian_std",0)>0:
-            frame_img = apply_gaussian(frame_img, self.noise_cfg["gaussian_std"], self.rng)
-        if self.noise_cfg.get("salt_pepper_enabled") and self.noise_cfg.get("salt_pepper_prob",0)>0:
-            frame_img = apply_salt_pepper(frame_img, self.noise_cfg["salt_pepper_prob"], self.rng)
-        if self.noise_cfg.get("poisson"):
-            frame_img = apply_poisson(frame_img, self.rng)
-        if self.jitter > 0:
-            frame_img = apply_jitter(frame_img, self.jitter, self.rng)
+        # shared disturbances pipeline per spec (atmosphere -> gaussian -> salt&pepper -> poisson -> jitter)
+        frame_img = self.pipeline.apply(frame_img, self.rng)
 
         # Sr.2 Camera Type: if colour, present as BGR for display (detector will convert to gray)
         if self.cfg["camera"].get("type", "monochrome") in ("colour", "color"):
@@ -110,10 +113,12 @@ class SyntheticSource(FrameSource):
 
     def update_config(self, cfg):
         self.cfg = cfg
-        self.jitter = float(cfg["camera"].get("jitter_px",0))
-        self.atmo_type = cfg["atmosphere"].get("type","clear")
-        self.atmo_strength = float(cfg["atmosphere"].get("strength",0))
-        self.noise_cfg = cfg["noise"]
+        self.pipeline.update_config(cfg)
+        # keep legacy mirrors in sync
+        self.jitter = self.pipeline.jitter
+        self.atmo_type = self.pipeline.atmo_type
+        self.atmo_strength = self.pipeline.atmo_strength
+        self.noise_cfg = self.pipeline.noise_cfg
         self._fps = float(cfg["camera"]["fps"])
         # world + environment (stars/gradient/vignetting/brightness) — rebuild base if needed
         self.world.update_config(cfg, seed=self.seed)

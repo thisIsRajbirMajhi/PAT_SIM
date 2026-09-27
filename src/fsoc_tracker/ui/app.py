@@ -12,9 +12,8 @@ from .benchmark_dialog import BenchmarkResultDialog
 from ..config.loader import load_config
 from ..input.synthetic_source import SyntheticSource
 from ..input.video_source import VideoSource
-from ..perception.detector import BeaconDetector
-from ..tracking.tracker import Tracker
-from ..control.camera_controller import CameraController
+from ..pipeline import BeaconDetector, Tracker
+from ..camera import CameraController
 from ..evaluation.metrics import MetricsCollector
 from ..evaluation.report import export_run
 from ..evaluation.auto_logger import RobustPerfLogger
@@ -511,7 +510,7 @@ class MainWindow(QMainWindow):
     def show_help(self):
         QMessageBox.information(self, "Help",
             "FSOC PAT Simulator  ·  Quick start\n\n"
-            "1. Control Deck → Preset (Clean / High Noise / Fog) → Apply\n"
+            "1. Control Deck → adjust Target/Camera/Environment → Apply\n"
             "2. Input: Synthetic (procedural world) or Video (.mp4 @30 fps, PTZ bypassed)\n"
             "3. Run — Camera: reticle=boresight, amber=bbox+centroid, green=diamond=estimate, trail=fade, arrow=velocity\n"
             "   World: amber trail = beacon, blue = camera FOV, + = boresight, scale bar = 400 px\n"
