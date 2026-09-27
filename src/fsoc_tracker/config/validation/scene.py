@@ -5,7 +5,7 @@ def validate_scene(cfg):
     # -- Camera Parameters --
     w, h = cfg["world"]["width"], cfg["world"]["height"]
     assert 2000 <= w <= 4000 and 2000 <= h <= 4000, "Screen Size must be 2000-4000 (spec min 2000)"
-    assert cfg["world"].get("background", 18) in range(0, 80), "background 0-80"
+    assert 0 <= cfg["world"].get("background", 18) <= 80, "background 0-80"
     assert cfg["camera"]["type"] in ("monochrome", "colour", "color"), "Camera Type must be monochrome|colour"
     assert 320 <= cfg["camera"]["resolution"][0] <= 1920 and 240 <= cfg["camera"]["resolution"][1] <= 1080, "Resolution 320-1920 x 240-1080"
     assert 1.0 <= cfg["camera"]["fov_deg"][0] <= 12 and 1.0 <= cfg["camera"]["fov_deg"][1] <= 12, "FOV 1-12°"

@@ -1,5 +1,5 @@
 from ..environment import (
-    build_environment_base,
+    build_environment_base_with_mask,
     apply_twinkle,
     environment_changed,
 )
@@ -28,8 +28,8 @@ class World:
         h = cfg["world"]["height"]
         self.w = w; self.h = h
         self.bg = int(cfg["world"].get("background", 18))
-        # build base with all environment systems
-        self.base = self._build_base(cfg, seed)
+        # build base with all environment systems (+ star mask for twinkle)
+        self.base, self.star_mask = self._build_base(cfg, seed)
         # target dynamics + appearance (canonical in target/)
         self._manager = TargetManager(cfg, seed=seed)
         self._renderer = BeaconRenderer(cfg)
@@ -53,7 +53,7 @@ class World:
 
     # ---------- base building (delegates to environment/ module) ----------
     def _build_base(self, cfg, seed):
-        return build_environment_base(cfg, seed)
+        return build_environment_base_with_mask(cfg, seed)
 
     def _get_user_polygon(self, cx, cy, half):
         """Return polygon points for user-defined shape. Uses custom_polygon if provided, else default 5-point star."""
@@ -69,7 +69,7 @@ class World:
         if seed is not None:
             self.seed = seed
         if rebuild:
-            self.base = self._build_base(cfg, self.seed)
+            self.base, self.star_mask = self._build_base(cfg, self.seed)
         # target dynamics (rebuilds trajectories if count/shape/trajectory changed)
         self._manager.update_config(cfg, frame_id=self.frame_id)
         # target appearance (size/intensity/shape/polygon live)
@@ -97,7 +97,8 @@ class World:
 
         env = self.cfg.get("environment", {})
         if env.get("stars_enabled") and env.get("stars_twinkle"):
-            img = apply_twinkle(img, self.frame_id)
+            amount = int(env.get("stars_twinkle_amount", 6))
+            img = apply_twinkle(img, self.frame_id, amount=amount, mask=self.star_mask)
 
         # draw beacon(s) — support count (independent trajectories Sr.8) & shape Sr.9 (including user-defined)
         positions = self._manager.resolve_positions(world_pos, self.target_size)

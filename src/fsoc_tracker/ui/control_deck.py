@@ -221,12 +221,18 @@ class ControlDeck(QDialog):
             self.grad_top_spin.setValue(int(env.get("gradient_top",22)))
             self.grad_bottom_spin.setValue(int(env.get("gradient_bottom",38)))
             self.grad_angle_spin.setValue(int(env.get("gradient_angle",90)))
+            if hasattr(self, "texture_enabled"):
+                self.texture_enabled.setChecked(bool(env.get("texture_enabled",True)))
+            if hasattr(self, "texture_strength_spin"):
+                self.texture_strength_spin.setValue(int(env.get("texture_strength",5)))
             self.stars_enabled.setChecked(bool(env.get("stars_enabled",False)))
             self.stars_density_spin.setValue(float(env.get("stars_density",0.0007)))
             self.stars_brightness_spin.setValue(int(env.get("stars_brightness",185)))
             self.stars_minmag_spin.setValue(int(env.get("stars_min_mag",90)))
             self.stars_maxmag_spin.setValue(int(env.get("stars_max_mag",255)))
             self.stars_twinkle_check.setChecked(bool(env.get("stars_twinkle",False)))
+            if hasattr(self, "stars_twinkle_amount_spin"):
+                self.stars_twinkle_amount_spin.setValue(int(env.get("stars_twinkle_amount",6)))
             self.stars_seed_spin.setValue(int(env.get("stars_seed",1337)))
             self.vig_enabled.setChecked(bool(env.get("vignetting_enabled",False)))
             self.vig_strength_spin.setValue(float(env.get("vignetting_strength",0.42)))
@@ -494,6 +500,16 @@ class ControlDeck(QDialog):
         fg.addRow("Type", self.grad_type_combo); fg.addRow("Top intensity", self.grad_top_spin); fg.addRow("Bottom intensity", self.grad_bottom_spin); fg.addRow("Angle °", self.grad_angle_spin)
         outer_lay.addWidget(grp_grad)
 
+        # --- Texture ---
+        grp_tex = QGroupBox("Sensor Texture (non-uniformity)")
+        grp_tex.setCheckable(True)
+        grp_tex.setChecked(bool(env.get("texture_enabled", True)))
+        self.texture_enabled = grp_tex
+        ft = QFormLayout(grp_tex)
+        self.texture_strength_spin = QSpinBox(); self.texture_strength_spin.setRange(0,20); self.texture_strength_spin.setValue(int(env.get("texture_strength",5)))
+        ft.addRow("Strength (0-20)", self.texture_strength_spin)
+        outer_lay.addWidget(grp_tex)
+
         # --- Stars ---
         grp_stars = QGroupBox("Stars Clutter")
         grp_stars.setCheckable(True)
@@ -504,12 +520,13 @@ class ControlDeck(QDialog):
         self.stars_brightness_spin = QSpinBox(); self.stars_brightness_spin.setRange(60,255); self.stars_brightness_spin.setValue(int(env.get("stars_brightness",185)))
         self.stars_minmag_spin = QSpinBox(); self.stars_minmag_spin.setRange(40,200); self.stars_minmag_spin.setValue(int(env.get("stars_min_mag",90)))
         self.stars_maxmag_spin = QSpinBox(); self.stars_maxmag_spin.setRange(100,255); self.stars_maxmag_spin.setValue(int(env.get("stars_max_mag",255)))
-        self.stars_twinkle_check = QCheckBox("Twinkle (per-frame ±6)")
+        self.stars_twinkle_check = QCheckBox("Twinkle (per-frame, stars only)")
         self.stars_twinkle_check.setChecked(bool(env.get("stars_twinkle", False)))
+        self.stars_twinkle_amount_spin = QSpinBox(); self.stars_twinkle_amount_spin.setRange(0,30); self.stars_twinkle_amount_spin.setValue(int(env.get("stars_twinkle_amount",6)))
         self.stars_seed_spin = QSpinBox(); self.stars_seed_spin.setRange(0,999999); self.stars_seed_spin.setValue(int(env.get("stars_seed",1337)))
         fs.addRow("Density (stars/px)", self.stars_density_spin); fs.addRow("Overall brightness", self.stars_brightness_spin)
         fs.addRow("Min mag", self.stars_minmag_spin); fs.addRow("Max mag", self.stars_maxmag_spin)
-        fs.addRow(self.stars_twinkle_check); fs.addRow("Stars seed", self.stars_seed_spin)
+        fs.addRow(self.stars_twinkle_check); fs.addRow("Twinkle amount", self.stars_twinkle_amount_spin); fs.addRow("Stars seed", self.stars_seed_spin)
         outer_lay.addWidget(grp_stars)
 
         # --- Vignetting ---
@@ -670,12 +687,18 @@ class ControlDeck(QDialog):
         env["gradient_top"] = int(self.grad_top_spin.value())
         env["gradient_bottom"] = int(self.grad_bottom_spin.value())
         env["gradient_angle"] = int(self.grad_angle_spin.value())
+        if hasattr(self, "texture_enabled"):
+            env["texture_enabled"] = bool(self.texture_enabled.isChecked())
+        if hasattr(self, "texture_strength_spin"):
+            env["texture_strength"] = int(self.texture_strength_spin.value())
         env["stars_enabled"] = bool(self.stars_enabled.isChecked())
         env["stars_density"] = float(self.stars_density_spin.value())
         env["stars_brightness"] = int(self.stars_brightness_spin.value())
         env["stars_min_mag"] = int(self.stars_minmag_spin.value())
         env["stars_max_mag"] = int(self.stars_maxmag_spin.value())
         env["stars_twinkle"] = bool(self.stars_twinkle_check.isChecked())
+        if hasattr(self, "stars_twinkle_amount_spin"):
+            env["stars_twinkle_amount"] = int(self.stars_twinkle_amount_spin.value())
         env["stars_seed"] = int(self.stars_seed_spin.value())
         env["vignetting_enabled"] = bool(self.vig_enabled.isChecked())
         env["vignetting_strength"] = float(self.vig_strength_spin.value())

@@ -12,5 +12,5 @@ def validate_disturbances(cfg):
     assert cfg["platform"]["type"] in ("none", "linear", "circular", "random", "spiral", "figure_of_8", "figure_8", "figure-of-8", "spiral"), "Platform Linear def + Circular/Random/Spiral/Figure_8"
     assert 0 <= cfg["platform"].get("speed_px_per_frame", 0) <= 20, "Platform ±20 px/frame"
 
-    # environment brightness etc already validated elsewhere
+    # environment brightness etc are validated in validate_environment (see validation/environment.py)
     return cfg
