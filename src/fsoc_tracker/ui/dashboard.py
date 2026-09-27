@@ -429,7 +429,7 @@ class Dashboard(QWidget):
         vig_txt = f"{'ON' if vignetting_enabled else 'OFF'} {vignetting_strength:.2f}" if vignetting_enabled else "OFF"
         self.s_env.row("vignetting").set_value(vig_txt, color=COLORS['accent'] if vignetting_enabled else COLORS['muted'])
         self.s_env.row("vignetting").unit.setText("")
-        bright_txt = f"×{brightness_gain:.2f} {brightness_offset:+d}"
+        bright_txt = f"×{float(brightness_gain):.2f} {float(brightness_offset):+.0f}"
         self.s_env.row("brightness").set_value(bright_txt)
         self.s_env.row("brightness").unit.setText("")
         vid_txt = f"{vid_centre_x:+.0f},{vid_centre_y:+.0f}" if (vid_centre_x !=0 or vid_centre_y !=0) else "0,0 (centre)"

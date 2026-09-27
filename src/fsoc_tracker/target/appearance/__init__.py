@@ -1,4 +1,9 @@
-from .renderer import BeaconRenderer
-from .shapes import draw_beacon, get_user_polygon
+from .renderer import PEAK_INTENSITY, BeaconRenderer, atmosphere_intensity_scale
+from .shapes import draw_beacon
 
-__all__ = ["BeaconRenderer", "draw_beacon", "get_user_polygon"]
+__all__ = [
+    "BeaconRenderer",
+    "atmosphere_intensity_scale",
+    "PEAK_INTENSITY",
+    "draw_beacon",
+]

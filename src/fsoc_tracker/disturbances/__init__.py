@@ -2,13 +2,14 @@
 
 Layout:
     disturbances/
-        platform/    PlatformMotion (ego-motion / vibration -> perturbs camera centre)
-        frame/       apply_jitter (geometric frame shift)
-        atmosphere/  apply_atmosphere (haze/fog/rain/low_light/clear)
-        sensor/      apply_gaussian / apply_salt_pepper / apply_poisson
-        pipeline.py  apply_disturbances() + DisturbancePipeline
+        platform/    PlatformMotion (environment-side ego-motion -> perturbs camera centre)
+        atmosphere/  apply_atmosphere (environment-side veil: haze/fog/rain/low_light)
+        sensor/      apply_gaussian / apply_salt_pepper / apply_poisson (camera-side)
+        frame/       apply_jitter (camera-side mount vibration)
+        pipeline.py  apply_environment() + apply_camera() + apply_disturbances()
+                     + DisturbancePipeline
                      (canonical order: atmosphere -> gaussian -> salt&pepper -> poisson -> jitter)
-        config.py    defaults + get_platform/get_atmosphere/get_noise/get_jitter/is_disturbances_active
+        config.py    defaults + getters + is_image_active/is_motion_active/is_disturbances_active
         factory.py   make_platform_motion(cfg, seed) / make_pipeline(cfg)
 
 Shared-ownership rule: environment/ and camera/input MUST import from here —
@@ -25,16 +26,19 @@ from .config import (
     get_noise,
     get_platform,
     is_disturbances_active,
+    is_image_active,
+    is_motion_active,
 )
 from .factory import make_pipeline, make_platform_motion
 from .frame import apply_jitter
-from .pipeline import DisturbancePipeline, apply_disturbances
-from .platform import PlatformMotion
+from .pipeline import DisturbancePipeline, apply_camera, apply_disturbances, apply_environment
+from .platform import PlatformMotion, normalize_platform_type
 from .sensor import apply_gaussian, apply_poisson, apply_salt_pepper
 
 __all__ = [
     # platform / frame
     "PlatformMotion",
+    "normalize_platform_type",
     "apply_jitter",
     # atmosphere
     "apply_atmosphere",
@@ -44,9 +48,11 @@ __all__ = [
     "apply_poisson",
     # pipeline / factory
     "apply_disturbances",
+    "apply_environment",
+    "apply_camera",
     "DisturbancePipeline",
-    "make_platform_motion",
     "make_pipeline",
+    "make_platform_motion",
     # config
     "PLATFORM_DEFAULTS",
     "ATMOSPHERE_DEFAULTS",
@@ -56,5 +62,7 @@ __all__ = [
     "get_atmosphere",
     "get_noise",
     "get_jitter",
+    "is_image_active",
+    "is_motion_active",
     "is_disturbances_active",
 ]

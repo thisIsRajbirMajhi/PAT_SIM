@@ -1,88 +1,107 @@
-"""Platform ego-motion / vibration — canonical implementation.
+"""Platform ego-motion / vibration — environment-side geometry disturbance.
 
-Shared by environment and camera/input. Moved verbatim from
-environment/disturbances/platform_motion.py (originally simulation/platform_motion.py).
+Perturbs the camera centre (via pan/tilt in SyntheticSource), i.e. the
+world appears to shift. Deterministic given (cfg, seed); call reset()
+or construct anew to restart a run reproducibly.
+
+Motion types (speed in px/frame, bounded so tracking stays feasible):
+    none:        no motion
+    linear:      constant drift along heading (or fixed velocity vector)
+    circular:    bounded orbit, radius ~ 8*speed
+    random:      gaussian random walk, clipped to +-500 px
+    spiral:      expanding orbit, capped
+    figure_of_8: Lissajous 1:2, amplitude ~ 9*speed
+Type aliases (figure_8, figure-8, figure8, ...) are normalized.
+Per-step deltas are clamped to +-20 px (spec max).
 """
 import math
 
 import numpy as np
 
+FIGURE_8_ALIASES = frozenset({
+    "figure_of_8", "figure_8", "figure-of-8", "figure-of_8",
+    "figure8", "figure-8", "figure_of-8", "eight",
+})
+
+LINEAR_WANDER = 600.0
+RANDOM_WANDER = 500.0
+MAX_DELTA = 20.0
+
+
+def normalize_platform_type(raw):
+    t = str(raw or "none").strip().lower().replace(" ", "_")
+    if t in FIGURE_8_ALIASES:
+        return "figure_of_8"
+    return t
+
 
 class PlatformMotion:
     def __init__(self, cfg, seed=42):
-        self.type = cfg["platform"].get("type", "none")
-        # Support both scalar speed and vector velocity [vx,vy] per Preset Plan P09
-        vel = cfg["platform"].get("velocity_px_frame", cfg["platform"].get("velocity_px_per_frame", None))
+        plat = cfg.get("platform", {}) if isinstance(cfg, dict) else {}
+        self.type = normalize_platform_type(plat.get("type", "none"))
+        vel = plat.get("velocity_px_frame", plat.get("velocity_px_per_frame", None))
         if isinstance(vel, (list, tuple)) and len(vel) == 2:
             self.velocity = np.array([float(vel[0]), float(vel[1])])
             self.speed = float(np.hypot(vel[0], vel[1]))
         else:
             self.velocity = None
-            self.speed = float(cfg["platform"].get("speed_px_per_frame", 0))
-            if vel is not None and not isinstance(vel, (list, tuple)):
-                # scalar velocity alias
+            self.speed = float(plat.get("speed_px_per_frame", 0.0))
+            if isinstance(vel, (int, float)):
                 self.speed = float(vel)
-        self.amp = float(cfg["platform"].get("amplitude", 0))
-        self.rng = np.random.default_rng(seed)
-        self.offset = np.array([0.0, 0.0])
-        self.prev_offset = np.array([0.0, 0.0])
+        self.seed = int(seed)
+        self._init_rng()
+        self.reset()
+
+    def _init_rng(self):
+        self.rng = np.random.default_rng(self.seed)
+        self.heading = self.rng.uniform(0, 2 * math.pi) if self.type == "linear" else 0.0
+
+    def reset(self, seed=None):
+        if seed is not None:
+            self.seed = int(seed)
+        # rewind rng so a reset run reproduces the original motion exactly
+        self._init_rng()
         self.t = 0
-        self.dir = self.rng.uniform(0, 2 * math.pi) if self.type == "linear" and self.velocity is None else 0
-        # for spiral/figure8 keep phase
-        self.spiral_r = 0.0
+        self.offset = np.zeros(2, dtype=np.float64)
+        self.prev_offset = np.zeros(2, dtype=np.float64)
+
+    def _linear_delta(self):
+        if self.velocity is not None:
+            return float(self.velocity[0]), float(self.velocity[1])
+        return math.cos(self.heading) * self.speed, math.sin(self.heading) * self.speed
 
     def step(self):
         self.t += 1
-        if self.type == "none" or self.speed == 0:
+        if self.type == "none" or self.speed <= 0:
             return (0.0, 0.0)
-        new_offset = self.offset.copy()
         if self.type == "linear":
-            if self.velocity is not None:
-                dx, dy = float(self.velocity[0]), float(self.velocity[1])
-            else:
-                dx = math.cos(self.dir) * self.speed
-                dy = math.sin(self.dir) * self.speed
-            new_offset[0] += dx
-            new_offset[1] += dy
-            new_offset = np.clip(new_offset, -600, 600)
+            dx, dy = self._linear_delta()
+            new = np.clip(self.offset + [dx, dy], -LINEAR_WANDER, LINEAR_WANDER)
         elif self.type == "circular":
-            ang = 0.02 * self.t
-            amp = self.speed * 8.0
-            new_offset[0] = math.cos(ang) * amp
-            new_offset[1] = math.sin(ang) * amp
+            ang, amp = 0.02 * self.t, self.speed * 8.0
+            new = np.array([math.cos(ang) * amp, math.sin(ang) * amp])
         elif self.type == "random":
-            # random walk delta
-            dx = self.rng.normal(0, self.speed * 0.7)
-            dy = self.rng.normal(0, self.speed * 0.7)
-            new_offset[0] += dx
-            new_offset[1] += dy
-            new_offset = np.clip(new_offset, -500, 500)
+            new = np.clip(
+                self.offset + self.rng.normal(0, self.speed * 0.7, size=2),
+                -RANDOM_WANDER, RANDOM_WANDER,
+            )
         elif self.type == "spiral":
-            # expanding spiral
             ang = 0.025 * self.t
-            rad = min(120 + 0.6 * self.t, 450) * (self.speed / 5.0)
-            new_offset[0] = math.cos(ang) * rad * 0.5
-            new_offset[1] = math.sin(ang) * rad * 0.5
-        elif self.type in ("figure_of_8", "figure_8", "figure-eight", "figure8"):
-            ang = 0.018 * self.t
-            amp = self.speed * 9.0
-            new_offset[0] = math.sin(ang) * amp
-            new_offset[1] = math.sin(ang) * math.cos(ang) * amp * 0.8
-        else:
-            # fallback linear
-            dx = math.cos(self.dir) * self.speed
-            dy = math.sin(self.dir) * self.speed
-            new_offset[0] += dx
-            new_offset[1] += dy
-
-        delta = new_offset - self.prev_offset
-        # for linear/random where we used incremental, prev_offset is previous new_offset, so delta is correct
-        # for circular/spiral/figure8 where new_offset is absolute, delta is also correct
-        self.prev_offset = new_offset.copy()
-        self.offset = new_offset.copy()
-        # clamp delta to ±20 as per spec max
-        delta = np.clip(delta, -20, 20)
+            rad = min(120 + 0.6 * self.t, 450) * (self.speed / 5.0) * 0.5
+            new = np.array([math.cos(ang) * rad, math.sin(ang) * rad])
+        elif self.type == "figure_of_8":
+            ang, amp = 0.018 * self.t, self.speed * 9.0
+            new = np.array([
+                math.sin(ang) * amp,
+                math.sin(ang) * math.cos(ang) * amp * 0.8,
+            ])
+        else:  # unknown -> drift like linear
+            dx, dy = self._linear_delta()
+            new = np.clip(self.offset + [dx, dy], -LINEAR_WANDER, LINEAR_WANDER)
+        delta = np.clip(new - self.prev_offset, -MAX_DELTA, MAX_DELTA)
+        self.prev_offset = new.copy()
+        self.offset = new.copy()
         return (float(delta[0]), float(delta[1]))
 
     def get_offset(self):
-        return tuple(self.offset)
+        return (float(self.offset[0]), float(self.offset[1]))

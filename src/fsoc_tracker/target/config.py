@@ -1,28 +1,36 @@
 """Canonical defaults for the Target module.
 
 Single source of truth remains config/defaults.py:DEFAULT_CONFIG;
-re-exported here for discoverability and standalone use.
+a deep copy is re-exported here so mutating it never affects globals.
+Accessors return copies (mutating the result never mutates the cfg).
 """
+import copy
+
+from ..config.accessors import get_target as _get_target
 from ..config.defaults import DEFAULT_CONFIG
 
-TARGET_DEFAULTS = DEFAULT_CONFIG["target"]
+TARGET_DEFAULTS = copy.deepcopy(DEFAULT_CONFIG["target"])
 
 
 def get_target(cfg):
-    return cfg.get("target", {})
+    tgt = _get_target(cfg)
+    return dict(tgt) if isinstance(tgt, dict) else {}
 
 
 def get_visibility_schedule(cfg):
-    return cfg["target"].get("visibility_schedule") or cfg.get("visibility", {}).get("schedule")
+    if not isinstance(cfg, dict):
+        return None
+    tgt = cfg.get("target", {}) or {}
+    return tgt.get("visibility_schedule") or (cfg.get("visibility", {}) or {}).get("schedule")
 
 
 def target_appearance_changed(old_cfg, new_cfg):
-    o, n = old_cfg.get("target", {}), new_cfg.get("target", {})
+    o = old_cfg.get("target", {}) if isinstance(old_cfg, dict) else {}
+    n = new_cfg.get("target", {}) if isinstance(new_cfg, dict) else {}
     return (
         o.get("shape") != n.get("shape")
         or o.get("size") != n.get("size")
-        or o.get("intensity") != n.get("intensity")
-        or o.get("custom_polygon") != n.get("custom_polygon")
+        or o.get("blink_rate_hz") != n.get("blink_rate_hz")
     )
 
 

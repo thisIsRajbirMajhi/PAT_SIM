@@ -1,7 +1,41 @@
-"""Beacon renderer — draws count beacons with glow + blur + re-brightened core."""
-import cv2
+"""Beacon renderer — draws count beacons with diffuse glow + sharp core.
 
-from .shapes import draw_beacon, get_user_polygon
+Pipeline per beacon: flat glow quad -> small Gaussian blur (diffuse halo) ->
+sharp square/circle core on top. Blurring only the glow keeps the halo while
+the core stays at full intensity, so no redraw pass is wasted.
+
+`draw()` works in place on `img` (caller passes a scratch copy) and returns it.
+`intensity_scale` dims the beacon for atmosphere (fog/haze/rain/low_light);
+World.render_world() computes it from the atmosphere config.
+"""
+import cv2
+import numpy as np
+
+from .shapes import draw_beacon
+
+#: fixed beacon core peak (before atmosphere dimming) — kept simple by design
+PEAK_INTENSITY = 255
+
+
+def atmosphere_intensity_scale(cfg):
+    """Beacon dimming factor in [0.15, 1.0] for the configured atmosphere."""
+    atmo = cfg.get("atmosphere", {}) if isinstance(cfg, dict) else {}
+    atype = atmo.get("type", "clear")
+    try:
+        s = float(np.clip(atmo.get("strength", 0.0), 0, 1))
+    except (TypeError, ValueError):
+        s = 0.0
+    if atype == "haze":
+        scale = 1.0 - 0.30 * s
+    elif atype == "fog":
+        scale = 1.0 - 0.45 * s
+    elif atype == "rain":
+        scale = 1.0 - 0.20 * s
+    elif atype == "low_light":
+        scale = 0.45 + 0.55 * (1.0 - s)
+    else:
+        scale = 1.0
+    return float(np.clip(scale, 0.15, 1.0))
 
 
 class BeaconRenderer:
@@ -11,42 +45,36 @@ class BeaconRenderer:
     def update_config(self, cfg):
         self.cfg = cfg
         self.size = int(cfg["target"]["size"])
-        self.intensity = int(cfg["target"].get("intensity", 255))
-        self.shape = cfg["target"].get("shape", "square")
-        self.custom_polygon = cfg["target"].get("custom_polygon", None)
+        self.intensity = PEAK_INTENSITY
+        shape = cfg["target"].get("shape", "square")
+        self.shape = shape if shape == "circle" else "square"
         self.bg = int(cfg["world"].get("background", 18))
 
-    def draw(self, img, positions, w, h):
+    def draw(self, img, positions, w, h, intensity_scale=1.0):
         half = self.size // 2
+        peak = int(np.clip(round(self.intensity * float(intensity_scale)), 0, 255))
         for (x_f, y_f) in positions:
             x = int(round(x_f))
             y = int(round(y_f))
             if not (0 <= x < w and 0 <= y < h):
                 continue
-            glow = self.bg + 35 if self.shape == "gaussian" else self.bg + 45
-            draw_beacon(img, x, y, self.shape, half, glow, self.intensity, self.custom_polygon)
-            # blur small region for realism
-            x0 = max(0, x - half - 2); y0 = max(0, y - half - 2)
-            x1 = min(w, x + half + 3); y1 = min(h, y + half + 3)
+            glow = int(np.clip(round((self.bg + 45) * float(intensity_scale)), 0, 255))
+            draw_beacon(img, x, y, self.shape, half, glow, peak)
+            # diffuse the glow halo, then restore the sharp core (single pass each)
+            x0 = max(0, x - half - 3); y0 = max(0, y - half - 3)
+            x1 = min(w, x + half + 4); y1 = min(h, y + half + 4)
             patch = img[y0:y1, x0:x1]
             if patch.size > 0:
                 img[y0:y1, x0:x1] = cv2.GaussianBlur(patch, (3, 3), 0)
-                # re-brighten core after blur (mirrors World legacy behaviour)
-                self._redraw_core(img, x, y, half)
+            self._redraw_core(img, x, y, half, peak)
         return img
 
-    def _redraw_core(self, img, x, y, half):
+    def _redraw_core(self, img, x, y, half, peak=None):
+        peak = self.intensity if peak is None else int(peak)
         if self.shape == "circle":
-            cv2.circle(img, (x, y), half, int(self.intensity), -1)
-        elif self.shape == "gaussian":
-            cv2.circle(img, (x, y), half, int(self.intensity), -1)
-        elif self.shape == "cross":
-            cv2.rectangle(img, (x - half, y - 1), (x + half, y + 1), int(self.intensity), -1)
-            cv2.rectangle(img, (x - 1, y - half), (x + 1, y + half), int(self.intensity), -1)
-        elif self.shape == "user-defined":
-            cv2.fillPoly(img, [get_user_polygon(x, y, half, self.custom_polygon)], int(self.intensity))
+            cv2.circle(img, (x, y), half, peak, -1)
         else:
-            cv2.rectangle(img, (x - half, y - half), (x + half, y + half), int(self.intensity), -1)
+            cv2.rectangle(img, (x - half, y - half), (x + half, y + half), peak, -1)
 
 
-__all__ = ["BeaconRenderer"]
+__all__ = ["BeaconRenderer", "atmosphere_intensity_scale", "PEAK_INTENSITY"]

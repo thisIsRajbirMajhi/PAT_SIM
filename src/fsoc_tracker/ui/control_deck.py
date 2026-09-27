@@ -178,7 +178,7 @@ class ControlDeck(QDialog):
             # Target
             self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
             self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
-            self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square"))
+            self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square") if self.cfg["target"].get("shape","square") in ("square","circle") else "square")
             self.size_spin.setValue(int(self.cfg["target"].get("size",10)))
             self.tgt_init_mode_combo.setCurrentText(self.cfg["target"].get("initial_mode","random"))
             ip = self.cfg["target"].get("initial_pos")
@@ -186,15 +186,9 @@ class ControlDeck(QDialog):
                 self.tgt_init_x_spin.setValue(int(ip[0])); self.tgt_init_y_spin.setValue(int(ip[1]))
             self.traj_combo.setCurrentText(self.cfg["target"].get("trajectory","circular"))
             self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file","") or "")
-            # Custom polygon
-            poly = self.cfg["target"].get("custom_polygon")
-            if poly:
-                self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in poly]))
-            else:
-                self.custom_polygon_edit.clear()
             self.speed_spin.setValue(float(self.cfg["target"].get("speed_px_per_frame",2.8)))
-            self.angle_spin.setValue(float(self.cfg["target"].get("angle_deg",30)))
-            self.radius_spin.setValue(float(self.cfg["target"].get("radius",180)))
+            if hasattr(self, "blink_spin"):
+                self.blink_spin.setValue(float(self.cfg["target"].get("blink_rate_hz",0.0)))
             # Camera
             self.cam_type_combo.setCurrentText(self.cfg["camera"].get("type","monochrome"))
             self.res_w_spin.setValue(int(self.cfg["camera"]["resolution"][0]))
@@ -295,22 +289,12 @@ class ControlDeck(QDialog):
                 c["target"]["initial_pos"] = [int(self.tgt_init_x_spin.value()), int(self.tgt_init_y_spin.value())]
             c["target"]["trajectory"] = self.traj_combo.currentText()
             c["target"]["speed_px_per_frame"] = float(self.speed_spin.value())
-            c["target"]["angle_deg"] = float(self.angle_spin.value())
-            c["target"]["radius"] = float(self.radius_spin.value())
-            if c["target"]["shape"] == "user-defined":
-                txt = self.custom_polygon_edit.text().strip()
-                if txt:
-                    pts = []
-                    for part in txt.split(";"):
-                        part=part.strip()
-                        if not part: continue
-                        x_str,y_str = part.split(",")
-                        pts.append([int(float(x_str.strip())), int(float(y_str.strip()))])
-                    c["target"]["custom_polygon"] = pts if len(pts)>=3 else None
-                else:
-                    c["target"]["custom_polygon"] = None
-            else:
-                c["target"]["custom_polygon"] = None
+            if hasattr(self, "blink_spin"):
+                c["target"]["blink_rate_hz"] = float(self.blink_spin.value())
+            for _k in ("angle_deg", "radius", "intensity",
+                       "sinusoidal_amplitude", "sinusoidal_wavelength"):
+                c["target"].pop(_k, None)
+            c["target"]["custom_polygon"] = None
             if c["target"]["trajectory"] == "user-defined":
                 c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None
             else:
@@ -334,15 +318,10 @@ class ControlDeck(QDialog):
         self.tgt_type_combo = QComboBox(); self.tgt_type_combo.addItems(["beacon_spot"]); self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
         # Number of Targets 1 mandatory, 1-5 optional multiple (independent trajectories)
         self.tgt_count_spin = QSpinBox(); self.tgt_count_spin.setRange(1,5); self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
-        # Shape user-defined default Square + custom polygon support
-        self.tgt_shape_combo = QComboBox(); self.tgt_shape_combo.addItems(["square","circle","gaussian","cross","user-defined"]); self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square"))
-        self.custom_polygon_edit = QLineEdit(); self.custom_polygon_edit.setPlaceholderText("e.g., -5,-5; 5,-5; 5,5; -5,5  or leave empty for 5-point star")
-        # Load existing custom polygon if any
-        existing_poly = self.cfg["target"].get("custom_polygon")
-        if existing_poly and isinstance(existing_poly, list):
-            self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in existing_poly]))
-        self.btn_polygon_file = QPushButton("Load Polygon File…")
-        poly_hbox = QHBoxLayout(); poly_hbox.addWidget(self.custom_polygon_edit); poly_hbox.addWidget(self.btn_polygon_file)
+        # Shape: square (default) | circle
+        self.tgt_shape_combo = QComboBox(); self.tgt_shape_combo.addItems(["square","circle"])
+        _shape = self.cfg["target"].get("shape","square")
+        self.tgt_shape_combo.setCurrentText(_shape if _shape in ("square","circle") else "square")
         # Size 5-20 default 10
         self.size_spin = QSpinBox(); self.size_spin.setRange(5,20); self.size_spin.setValue(int(self.cfg["target"]["size"]))
         # Initial Location user-defined default Random
@@ -360,60 +339,26 @@ class ControlDeck(QDialog):
         self.btn_traj_file = QPushButton("Browse…")
         traj_hbox = QHBoxLayout(); traj_hbox.addWidget(self.custom_traj_edit); traj_hbox.addWidget(self.btn_traj_file)
         self.speed_spin = QDoubleSpinBox(); self.speed_spin.setRange(0,20); self.speed_spin.setSingleStep(0.5); self.speed_spin.setValue(float(self.cfg["target"]["speed_px_per_frame"]))
-        self.angle_spin = QDoubleSpinBox(); self.angle_spin.setRange(0,360); self.angle_spin.setValue(float(self.cfg["target"].get("angle_deg",30)))
-        self.radius_spin = QDoubleSpinBox(); self.radius_spin.setRange(50,800); self.radius_spin.setValue(float(self.cfg["target"].get("radius",400)))
+        self.blink_spin = QDoubleSpinBox(); self.blink_spin.setRange(0,50); self.blink_spin.setSingleStep(0.5); self.blink_spin.setValue(float(self.cfg["target"].get("blink_rate_hz",0.0)))
         f.addRow("Target Type", self.tgt_type_combo)
         f.addRow("Target Count", self.tgt_count_spin)
         f.addRow("Target Shape", self.tgt_shape_combo)
-        f.addRow("Custom Polygon", poly_hbox)
         f.addRow("Target Size", self.size_spin)
         f.addRow("Initial Position Mode", self.tgt_init_mode_combo)
         f.addRow("  Init X", self.tgt_init_x_spin); f.addRow("  Init Y", self.tgt_init_y_spin)
         f.addRow("Motion Trajectory", self.traj_combo)
         f.addRow("Custom Trajectory CSV", traj_hbox)
         f.addRow("Speed (px/frame)", self.speed_spin)
-        f.addRow("Angle (straight)", self.angle_spin)
-        f.addRow("Radius (circular/8)", self.radius_spin)
-        # Show/hide custom rows based on selection
+        f.addRow("Blink Rate (Hz, 0=steady)", self.blink_spin)
+        # Show/hide custom trajectory row based on selection
         def _update_target_custom_rows():
-            is_user_shape = self.tgt_shape_combo.currentText() == "user-defined"
-            self.custom_polygon_edit.setVisible(is_user_shape)
-            self.btn_polygon_file.setVisible(is_user_shape)
             is_user_traj = self.traj_combo.currentText() == "user-defined"
             self.custom_traj_edit.setVisible(is_user_traj)
             self.btn_traj_file.setVisible(is_user_traj)
-        self.tgt_shape_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
         self.traj_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
-        self.btn_polygon_file.clicked.connect(self._browse_polygon)
         self.btn_traj_file.clicked.connect(self._browse_traj)
         _update_target_custom_rows()
         return w
-
-    def _browse_polygon(self):
-        p,_ = QFileDialog.getOpenFileName(self, "Load custom polygon (JSON or CSV: x,y per row)", "", "JSON (*.json);;CSV (*.csv);;All (*.*)")
-        if p:
-            try:
-                import json, csv, os
-                if p.lower().endswith(".json"):
-                    with open(p) as f:
-                        data = json.load(f)
-                        # expect list of [x,y]
-                        if isinstance(data, list) and len(data) > 0:
-                            self.custom_polygon_edit.setText("; ".join([f"{x},{y}" for x,y in data]))
-                else:
-                    # CSV: x,y per row
-                    pts = []
-                    with open(p, newline='') as f:
-                        reader = csv.reader(f)
-                        for row in reader:
-                            if not row or row[0].strip().startswith('#'):
-                                continue
-                            vals = [v.strip() for v in row if v.strip()!='']
-                            if len(vals) >= 2:
-                                pts.append(f"{vals[0]},{vals[1]}")
-                    self.custom_polygon_edit.setText("; ".join(pts))
-            except Exception as e:
-                QMessageBox.warning(self, "Polygon load failed", str(e))
 
     def _browse_traj(self):
         p,_ = QFileDialog.getOpenFileName(self, "Load custom trajectory CSV (x,y or t,x,y per row)", "", "CSV (*.csv);;All (*.*)")
@@ -625,27 +570,14 @@ class ControlDeck(QDialog):
             c["target"]["initial_pos"] = [int(self.tgt_init_x_spin.value()), int(self.tgt_init_y_spin.value())]
         c["target"]["trajectory"] = self.traj_combo.currentText()
         c["target"]["speed_px_per_frame"] = float(self.speed_spin.value())
-        c["target"]["angle_deg"] = float(self.angle_spin.value())
-        c["target"]["radius"] = float(self.radius_spin.value())
-        # User-defined shape: custom polygon
-        if c["target"]["shape"] == "user-defined":
-            txt = self.custom_polygon_edit.text().strip()
-            if txt:
-                try:
-                    pts = []
-                    for part in txt.split(";"):
-                        part = part.strip()
-                        if not part:
-                            continue
-                        x_str, y_str = part.split(",")
-                        pts.append([int(float(x_str.strip())), int(float(y_str.strip()))])
-                    c["target"]["custom_polygon"] = pts if len(pts) >= 3 else None
-                except Exception:
-                    c["target"]["custom_polygon"] = None
-            else:
-                c["target"]["custom_polygon"] = None  # default 5-point star in World
-        else:
-            c["target"]["custom_polygon"] = None
+        if hasattr(self, "blink_spin"):
+            c["target"]["blink_rate_hz"] = float(self.blink_spin.value())
+        # drop retired keys from older presets (fixed geometry / fixed peak now)
+        for _k in ("angle_deg", "radius", "intensity",
+                   "sinusoidal_amplitude", "sinusoidal_wavelength"):
+            c["target"].pop(_k, None)
+        # Beacon shape is square|circle only (custom polygons removed)
+        c["target"]["custom_polygon"] = None
         # User-defined trajectory: custom CSV file
         if c["target"]["trajectory"] == "user-defined":
             c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None

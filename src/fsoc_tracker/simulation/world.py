@@ -6,7 +6,8 @@ from ..environment import (
 from ..target import (
     BeaconRenderer,
     TargetManager,
-    get_user_polygon,
+    atmosphere_intensity_scale,
+    is_blink_off,
     is_hidden,
 )
 
@@ -35,8 +36,10 @@ class World:
         self._renderer = BeaconRenderer(cfg)
         self._sync_target_mirrors()
         self.frame_id = 0
-        self.all_world_pos = [traj.step(0) for traj in self.trajectories]
-        self.world_pos = self.all_world_pos[0] if self.all_world_pos else self.traj.step(0)
+        # use manager positions directly: re-stepping here would advance
+        # stateful (random) trajectories an extra step per frame
+        self.all_world_pos = list(self._manager.all_world_pos)
+        self.world_pos = self.all_world_pos[0] if self.all_world_pos else self.world_pos
 
     def _sync_target_mirrors(self):
         m = self._manager
@@ -49,15 +52,10 @@ class World:
         self.target_size = r.size
         self.target_intensity = r.intensity
         self.target_shape = r.shape
-        self.custom_polygon = r.custom_polygon
 
     # ---------- base building (delegates to environment/ module) ----------
     def _build_base(self, cfg, seed):
         return build_environment_base_with_mask(cfg, seed)
-
-    def _get_user_polygon(self, cx, cy, half):
-        """Return polygon points for user-defined shape. Uses custom_polygon if provided, else default 5-point star."""
-        return get_user_polygon(cx, cy, half, self.custom_polygon)
 
     def update_config(self, cfg, seed=None):
         """Rebuild base only if environment/world relevant fields changed; handle multi-target and shape."""
@@ -75,7 +73,7 @@ class World:
         # target appearance (size/intensity/shape/polygon live)
         self._renderer.update_config(cfg)
         self._sync_target_mirrors()
-        self.all_world_pos = [traj.step(self.frame_id) for traj in self.trajectories]
+        # mirrors already hold manager positions; do NOT re-step stateful trajectories
 
     def step(self):
         # Update all targets independently (Sr.8 multi-target, canonical in TargetManager)
@@ -92,7 +90,8 @@ class World:
         img = self.base.copy()
 
         # P11 visibility schedule: hide beacon during hidden intervals (forces loss/re-acq)
-        if is_hidden(self.frame_id, self.cfg):
+        # blink modulation: skip drawing during the off half-cycle
+        if is_hidden(self.frame_id, self.cfg) or is_blink_off(self.frame_id, self.cfg):
             return img  # no beacon drawn
 
         env = self.cfg.get("environment", {})
@@ -100,12 +99,13 @@ class World:
             amount = int(env.get("stars_twinkle_amount", 6))
             img = apply_twinkle(img, self.frame_id, amount=amount, mask=self.star_mask)
 
-        # draw beacon(s) — support count (independent trajectories Sr.8) & shape Sr.9 (including user-defined)
+        # draw beacon(s) — square/circle, supports multi-target count
         positions = self._manager.resolve_positions(world_pos, self.target_size)
         # keep mirrors consistent when primary rendering path used
         if world_pos == self.world_pos:
             self.all_world_pos = list(self._manager.all_world_pos)
-        return self._renderer.draw(img, positions, self.w, self.h)
+        scale = atmosphere_intensity_scale(self.cfg)
+        return self._renderer.draw(img, positions, self.w, self.h, intensity_scale=scale)
 
     def reset(self, seed=None):
         if seed is not None:
@@ -114,5 +114,5 @@ class World:
         self._manager = TargetManager(self.cfg, seed=self.seed)
         self._renderer.update_config(self.cfg)
         self._sync_target_mirrors()
-        self.all_world_pos = [traj.step(0) for traj in self.trajectories]
-        self.world_pos = self.all_world_pos[0] if self.all_world_pos else self.traj.step(0)
+        self.all_world_pos = list(self._manager.all_world_pos)
+        self.world_pos = self.all_world_pos[0] if self.all_world_pos else self.world_pos

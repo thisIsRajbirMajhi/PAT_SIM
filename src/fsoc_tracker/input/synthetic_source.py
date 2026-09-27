@@ -5,6 +5,7 @@ from ..common.types import Frame, GroundTruth
 from ..simulation.world import World
 from ..camera import VirtualCamera
 from ..disturbances import DisturbancePipeline, PlatformMotion
+from ..target import is_blink_off, is_hidden
 
 class SyntheticSource(FrameSource):
     def __init__(self, cfg, seed=42):
@@ -27,7 +28,8 @@ class SyntheticSource(FrameSource):
         self.rng = np.random.default_rng(seed)
         self.frame_id = 0
         self._fps = float(cfg["camera"]["fps"])
-        # shared disturbances: single canonical pipeline (atmosphere -> noise -> jitter)
+        # shared disturbances: single canonical pipeline
+        # environment-side atmosphere, then camera-side sensor noise + jitter
         self.pipeline = DisturbancePipeline(cfg)
         # legacy mirrors (kept for backward compat; canonical state lives in self.pipeline)
         self.jitter = self.pipeline.jitter
@@ -92,8 +94,10 @@ class SyntheticSource(FrameSource):
         # extract viewport
         frame_img = self.camera.extract_viewport(world_img)
 
-        # shared disturbances pipeline per spec (atmosphere -> gaussian -> salt&pepper -> poisson -> jitter)
-        frame_img = self.pipeline.apply(frame_img, self.rng)
+        # shared disturbances, canonical order (see disturbances/pipeline.py):
+        # environment-side atmosphere first, then camera-side sensor noise + jitter
+        frame_img = self.pipeline.apply_environment(frame_img, self.rng)
+        frame_img = self.pipeline.apply_camera(frame_img, self.rng)
 
         # Sr.2 Camera Type: if colour, present as BGR for display (detector will convert to gray)
         if self.cfg["camera"].get("type", "monochrome") in ("colour", "color"):
@@ -103,9 +107,12 @@ class SyntheticSource(FrameSource):
             # beacon remains white
             frame_img[:, :, 0] = np.clip(frame_img[:, :, 0].astype(np.int16) + 6, 0, 255).astype(np.uint8)  # blue channel +6
 
-        # ground truth in image coords
-        image_pos = self.camera.world_to_image(world_pos)
-        gt = GroundTruth(world_pos=world_pos, visible=image_pos is not None, image_pos=image_pos)
+        # ground truth in image coords (hidden schedule or blink off-phase -> not visible)
+        if is_hidden(self.world.frame_id, self.cfg) or is_blink_off(self.world.frame_id, self.cfg):
+            gt = GroundTruth(world_pos=world_pos, visible=False, image_pos=None)
+        else:
+            image_pos = self.camera.world_to_image(world_pos)
+            gt = GroundTruth(world_pos=world_pos, visible=image_pos is not None, image_pos=image_pos)
 
         frame = Frame(image=frame_img, frame_id=self.frame_id, timestamp=self.frame_id/self._fps, source_name="synthetic")
         self.frame_id += 1
