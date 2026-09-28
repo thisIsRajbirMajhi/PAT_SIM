@@ -28,6 +28,9 @@ class SyntheticSource(FrameSource):
         self.rng = np.random.default_rng(seed)
         self.frame_id = 0
         self._fps = float(cfg["camera"]["fps"])
+        # full-scene frame for the World FOV (set on every read)
+        self.last_world_img = None
+        self.last_all_world_pos = []
         # shared disturbances: single canonical pipeline
         # environment-side atmosphere, then camera-side sensor noise + jitter
         self.pipeline = DisturbancePipeline(cfg)
@@ -60,6 +63,9 @@ class SyntheticSource(FrameSource):
             self.camera._update_center()
         self.frame_id = 0
         self.rng = np.random.default_rng(self.seed)
+        # full-scene frame for the World FOV (set on every read)
+        self.last_world_img = None
+        self.last_all_world_pos = list(getattr(self.world, "all_world_pos", []))
         # platform is stateful (t/offset/rng) — must restart too, else reset is not reproducible
         self.platform = PlatformMotion(self.cfg, seed=self.seed)
         self.pipeline.update_config(self.cfg)
@@ -70,6 +76,18 @@ class SyntheticSource(FrameSource):
 
     def apply_camera_command(self, pan_rate, tilt_rate, dt):
         self.camera.apply_command(pan_rate, tilt_rate, dt)
+
+    def cue_camera_to_target(self):
+        """Coarse acquisition cue: point the gimbal so the target starts
+        rendered inside Camera FOV. Closed-loop PID then drives the
+        residual error to centre and tracks all dynamics."""
+        try:
+            wx, wy = self.world.world_pos
+            self.camera.pan = (float(wx) - float(self.camera.world_center[0])) / self.camera.px_per_deg
+            self.camera.tilt = -(float(wy) - float(self.camera.world_center[1])) / self.camera.px_per_deg
+            self.camera._update_center()
+        except Exception:
+            pass
 
     def read(self):
         # advance world
@@ -116,6 +134,12 @@ class SyntheticSource(FrameSource):
 
         frame = Frame(image=frame_img, frame_id=self.frame_id, timestamp=self.frame_id/self._fps, source_name="synthetic")
         self.frame_id += 1
+        # full scene for the World FOV: background + stars/gradient + ALL beacons
+        self.last_world_img = world_img
+        try:
+            self.last_all_world_pos = list(self.world.all_world_pos)
+        except Exception:
+            self.last_all_world_pos = [world_pos]
         return frame, gt
 
     def update_config(self, cfg):

@@ -55,15 +55,25 @@ class BeaconDetector:
         best_score = -1e9
         h, w = img.shape
         cx, cy = w / 2, h / 2
+        # blobs discarded by the gates — kept for the REJECTED overlay
+        rejected = []
         # predicted gating distance
         for i in range(1, num):  # skip background 0
             area = stats[i, cv2.CC_STAT_AREA]
-            if area < self.min_area or area > self.max_area:
-                continue
             x = stats[i, cv2.CC_STAT_LEFT]; y = stats[i, cv2.CC_STAT_TOP]
             ww = stats[i, cv2.CC_STAT_WIDTH]; hh = stats[i, cv2.CC_STAT_HEIGHT]
+            if area < self.min_area:
+                if area >= 3 and len(rejected) < 6:
+                    rejected.append((int(x), int(y), int(ww), int(hh), "SMALL"))
+                continue
+            if area > self.max_area:
+                if len(rejected) < 6:
+                    rejected.append((int(x), int(y), int(ww), int(hh), "LARGE"))
+                continue
             aspect = max(ww, hh) / max(1, min(ww, hh))
             if aspect > 3.5:
+                if len(rejected) < 6:
+                    rejected.append((int(x), int(y), int(ww), int(hh), "SHAPE"))
                 continue
             # mask for this component
             mask = (labels == i).astype(np.uint8) * 255
@@ -95,12 +105,20 @@ class BeaconDetector:
             if score > best_score:
                 best_score = score
                 # intensity weighted centroid refined
-                best = (cx_det, cy_det, x, y, ww, hh, area, peak, mean_int, score)
+                best = (cx_det, cy_det, x, y, ww, hh, area, peak, mean_int, score,
+                        fill, aspect, dist)
 
         if best is None:
-            return Detection(valid=False, confidence=0.0)
+            return Detection(valid=False, confidence=0.0, rejected=rejected)
 
-        cx_det, cy_det, x, y, ww, hh, area, peak, mean_int, score = best
-        # confidence mapping
-        confidence = float(np.clip(0.35 + score * 0.65 + (peak - 180) / 255 * 0.2, 0, 1))
-        return Detection(valid=True, centroid_px=(cx_det, cy_det), bbox=(x, y, ww, hh), confidence=confidence, score=score, area=area)
+        cx_det, cy_det, x, y, ww, hh, area, peak, mean_int, score, fill, aspect, dist = best
+        # Detection confidence: genuine measurement from blob quality, with
+        # dynamic range. brightness (peak/mean intensity), shape (fill/aspect)
+        # and proximity (to predicted/centre) each contribute; the maximum of
+        # 1.0 is only reachable by a perfectly saturated, compact, centred
+        # blob, so nominal tracks read ~0.8-0.97 and never a fixed 100%.
+        brightness = (peak / 255.0) * 0.6 + (mean_int / 255.0) * 0.4
+        shape = fill * 0.7 + (1 - min(aspect - 1, 1)) * 0.3
+        prox = max(0.0, 1 - dist / (max(w, h) * 0.6))
+        confidence = float(np.clip(brightness * 0.45 + shape * 0.30 + prox * 0.25, 0, 1))
+        return Detection(valid=True, centroid_px=(cx_det, cy_det), bbox=(x, y, ww, hh), confidence=confidence, score=score, area=area, rejected=rejected)

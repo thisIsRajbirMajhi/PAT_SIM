@@ -44,8 +44,9 @@ class CameraController:
         # if lost/reacquiring/searching -> search controller else PID
         if state in (TrackingState.SEARCHING, TrackingState.REACQUIRING, TrackingState.FAILED):
             # expanding spiral search — faster to meet ≤1s re-acq
-            self.search_angle += 0.32
-            self.search_radius = min(4.5, self.search_radius + 0.06)
+            # and to bring an off-FOV target into Camera FOV quickly on START
+            self.search_angle += 0.45
+            self.search_radius = min(4.5, self.search_radius + 0.09)
             import math
             pan_rate = math.cos(self.search_angle) * self.search_radius * 0.85
             tilt_rate = math.sin(self.search_angle) * self.search_radius * 0.85
