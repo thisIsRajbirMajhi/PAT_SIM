@@ -23,6 +23,7 @@ class CameraView(QWidget):
         self._centre_offset = None
         self._display = None      # DisplayState from pipeline.track.display
         self._telemetry = None    # TrackTelemetry for the primary track
+        self._target_size = 10    # beacon side length in image px (fallback box)
         self.show_grid = False
         self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -31,7 +32,8 @@ class CameraView(QWidget):
 
     def set_frame(self, frame_gray, detection=None, estimate=None, world_camera=None,
                   show_overlays=True, meta=None, centre_offset=None,
-                  display=None, telemetry=None, display_status=None):
+                  display=None, telemetry=None, display_status=None,
+                  target_size_px=None):
         if frame_gray is None:
             return
         h, w = frame_gray.shape[:2]
@@ -51,6 +53,11 @@ class CameraView(QWidget):
                 display = None
         self._display = display
         self._telemetry = telemetry
+        if target_size_px is not None:
+            try:
+                self._target_size = max(4, int(target_size_px))
+            except Exception:
+                pass
         if estimate is not None and getattr(estimate, "pos_px", None):
             try:
                 self._est_trail.append(tuple(estimate.pos_px))
@@ -172,9 +179,26 @@ class CameraView(QWidget):
         except Exception:
             pass
 
+        # ---- overlay palette: everything keyed off the live state color ----
+        # Single accent = state color; informational helpers stay neutral gray.
+        try:
+            state_col = QColor(_hex)
+        except Exception:
+            state_col = QColor("#9AA4B2")
+        dim_col = QColor("#9CA3AF")
+
         # overlays mapped to widget coords
         def to_widget(ix, iy):
             return ox + int(ix * scale), oy + int(iy * scale)
+
+        def _in_frame(ix, iy):
+            return 0 <= ix < self._w and 0 <= iy < self._h
+
+        def _fallback_box(cx, cy):
+            # config-sized box centered on (cx, cy) in image coords, so a
+            # bounding box exists even with no detector bbox (coasting, etc.)
+            _s = max(8, int(self._target_size) + 4)
+            return (int(cx - _s / 2), int(cy - _s / 2), _s, _s)
 
         # centre offset (calibration)
         if self._centre_offset is not None:
@@ -186,22 +210,23 @@ class CameraView(QWidget):
         else:
             ccx, ccy = self._w // 2, self._h // 2
 
-        # reticle: white square + circle at boresight (wireframe look)
+        # boresight reticle: minimal crosshair + center dot in state color
         rcx, rcy = to_widget(ccx, ccy)
-        p.setPen(QPen(QColor(255, 255, 255), 1))
-        s = max(8, int(28 * scale))
-        p.drawRect(rcx - s, rcy - int(s * 0.8), s * 2, int(s * 1.6))
-        p.drawEllipse(rcx - 6, rcy - 6, 12, 12)
-        # crosshair ticks through boresight
-        p.drawLine(rcx - s - 10, rcy, rcx - s + 6, rcy)
-        p.drawLine(rcx + s - 6, rcy, rcx + s + 10, rcy)
-        p.drawLine(rcx, rcy - int(s * 0.8) - 10, rcx, rcy - int(s * 0.8) + 6)
-        p.drawLine(rcx, rcy + int(s * 0.8) - 6, rcx, rcy + int(s * 0.8) + 10)
+        p.setPen(QPen(state_col, 1))
+        _gap, _arm = 10, 14
+        p.drawLine(rcx - _gap - _arm, rcy, rcx - _gap, rcy)
+        p.drawLine(rcx + _gap, rcy, rcx + _gap + _arm, rcy)
+        p.drawLine(rcx, rcy - _gap - _arm, rcx, rcy - _gap)
+        p.drawLine(rcx, rcy + _gap, rcx, rcy + _gap + _arm)
+        p.setBrush(state_col)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(rcx - 2, rcy - 2, 4, 4)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(state_col, 1))
 
-        # target annotation: identity + per-target state + real measurements.
-        # TGT-01 labels the tracked object, the status mirrors the banner,
-        # DET is the detector confidence of this frame, OFFSET is the live
-        # boresight pixel offset. Nothing here is synthesized.
+        # target annotation: one state-colored marker + one info tag.
+        # Tag carries identity, detector confidence and live boresight offset
+        # — the three facts that matter for this frame. Nothing synthesized.
         det = self._detection
         det_xy = None
         tele = getattr(self, "_telemetry", None)
@@ -210,55 +235,56 @@ class CameraView(QWidget):
         def est_pos_for_edge():
             ex0, ey0 = self._estimate.pos_px
             return ox + int(float(ex0) * scale), oy + int(float(ey0) * scale)
+
+        def _info_tag():
+            try:
+                import math
+                _off = math.hypot(x - ccx, y - ccy)
+            except Exception:
+                _off = None
+            conf_pct = f"{float(getattr(det, 'confidence', 0.0)) * 100:.0f}%"
+            _off_txt = f"{_off:.0f}px" if _off is not None else "—"
+            return f"{_tid}  ·  DET {conf_pct}  ·  OFF {_off_txt}"
+
         if det is not None and getattr(det, "valid", False) and getattr(det, "centroid_px", None):
             try:
                 x, y = det.centroid_px
                 wx, wy = to_widget(x, y)
                 det_xy = (wx, wy)
-                # error vector: boresight -> target (centering error, live)
-                p.setPen(QPen(QColor(255, 255, 255, 200), 1))
+                # centering-error vector: boresight -> target (live)
+                _err = QColor(state_col)
+                _err.setAlpha(170)
+                p.setPen(QPen(_err, 1))
                 p.drawLine(rcx, rcy, wx, wy)
-                # centroid rings
-                p.setPen(QPen(QColor(255, 255, 255), 1))
-                p.drawEllipse(wx - 6, wy - 6, 12, 12)
-                p.drawEllipse(wx - 10, wy - 10, 20, 20)
-                # cross
-                p.drawLine(wx - 8, wy, wx + 8, wy)
-                p.drawLine(wx, wy - 8, wx, wy + 8)
-                try:
-                    import math
-                    _off = math.hypot(x - ccx, y - ccy)
-                except Exception:
-                    _off = None
-                conf_pct = f"{float(getattr(det, 'confidence', 0.0)) * 100:.0f}%"
-                tag = f"{_tid}  \u00b7  {_label}"
-                tag_bg = QColor(_hex)
-                box_col = QColor(_hex)
-                parts = [f"DET {conf_pct}"]
-                parts.append(f"OFFSET {_off:.0f} px" if _off is not None else "OFFSET \u2014")
-                sub = "  \u00b7  ".join(parts)
-                if getattr(det, "bbox", None):
-                    bx, by, bw, bh = det.bbox
+                # single state-colored ring + cross (outline only)
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(state_col, 2))
+                p.drawEllipse(wx - 9, wy - 9, 18, 18)
+                p.setPen(QPen(state_col, 1))
+                p.drawLine(wx - 13, wy, wx + 13, wy)
+                p.drawLine(wx, wy - 13, wx, wy + 13)
+                tag = _info_tag()
+                _bbox = getattr(det, "bbox", None)
+                if _bbox is None and _in_frame(x, y):
+                    # valid centroid but no component box: config-sized fallback
+                    _bbox = _fallback_box(x, y)
+                if _bbox is not None:
+                    bx, by, bw, bh = _bbox
                     x0, y0 = to_widget(bx, by)
                     x1, y1 = to_widget(bx + bw, by + bh)
-                    p.setPen(QPen(box_col, 1))
+                    p.setBrush(Qt.NoBrush)
+                    p.setPen(QPen(state_col, 2))
                     p.drawRect(QRect(x0, y0, x1 - x0, y1 - y0))
-                    r1 = self._draw_tag(p, x0, y0, tag, tag_bg, clamp_top=vis_top,
-                                        clamp_right=vis_right - 4)
-                    self._draw_tag(p, r1.x(), r1.y() + r1.height() + 18, sub,
-                                   QColor("#9CA3AF"), clamp_top=vis_top,
+                    self._draw_tag(p, x0, y0, tag, state_col, clamp_top=vis_top,
                                    clamp_right=vis_right - 4)
                 else:
-                    r1 = self._draw_tag(p, wx + 12, wy, tag, tag_bg, clamp_top=vis_top,
-                                        clamp_right=vis_right - 4)
-                    self._draw_tag(p, r1.x(), r1.y() + r1.height() + 18, sub,
-                                   QColor("#9CA3AF"), clamp_top=vis_top,
+                    self._draw_tag(p, wx + 14, wy, tag, state_col, clamp_top=vis_top,
                                    clamp_right=vis_right - 4)
             except Exception:
                 pass
         elif (tele is not None and tele.predicted and tele.pred_fresh
                 and _disp.status == DisplayStatus.OFF_SCREEN):
-            # tracked target outside the frame: edge arrow toward the live
+            # tracked target outside the frame: edge marker toward the live
             # IMM prediction + identity chip (prediction, not a detection)
             try:
                 ex, ey = est_pos_for_edge()
@@ -267,19 +293,20 @@ class CameraView(QWidget):
                 ey_c = min(max(ey, vis_top + m), vis_bottom - m)
                 import math
                 ang = math.atan2(ey - ey_c, ex - ex_c)
-                p.setPen(QPen(QColor(_hex), 1))
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(state_col, 2))
                 p.drawEllipse(ex_c - 7, ey_c - 7, 14, 14)
                 p.drawLine(ex_c, ey_c,
-                           int(ex_c + 16 * math.cos(ang)), int(ey_c + 16 * math.sin(ang)))
-                self._draw_tag(p, ex_c + 12, ey_c, f"{_tid}  \u00b7  OFF-SCREEN",
-                               QColor(_hex), clamp_top=vis_top,
+                           int(ex_c + 18 * math.cos(ang)), int(ey_c + 18 * math.sin(ang)))
+                self._draw_tag(p, ex_c + 12, ey_c, f"{_tid}  ·  OFF-SCREEN",
+                               state_col, clamp_top=vis_top,
                                clamp_right=vis_right - 4)
             except Exception:
                 pass
 
-        # rejected blobs: dashed red boxes with REJECTED tags (failed area/shape gates)
+        # rejected blobs: subtle dashed outline (failed area/shape gates)
         try:
-            rej = list(getattr(det, "rejected", []) or [])[:4]
+            rej = list(getattr(det, "rejected", []) or [])[:3]
         except Exception:
             rej = []
         for rj in rej:
@@ -288,16 +315,18 @@ class CameraView(QWidget):
                 reason = str(rj[4]) if len(rj) > 4 else ""
                 x0, y0 = to_widget(bx, by)
                 x1, y1 = to_widget(bx + bw, by + bh)
+                p.setBrush(Qt.NoBrush)
                 p.setPen(QPen(QColor(230, 60, 60), 1, Qt.DashLine))
                 p.drawRect(QRect(x0, y0, max(3, x1 - x0), max(3, y1 - y0)))
-                lbl = f"REJECTED {reason}".strip()
-                self._draw_tag(p, x0, y0, lbl, QColor(190, 40, 40), clamp_top=vis_top,
-                               clamp_right=vis_right - 4)
+                if reason:
+                    self._draw_tag(p, x0, y0, f"REJ {reason}", QColor(190, 40, 40),
+                                   clamp_top=vis_top, clamp_right=vis_right - 4)
             except Exception:
                 continue
 
-        # estimate trail + marker (shows fused motion dynamics)
-        # trail first so marker draws on top
+        # motion trail in state color (fades toward the past) + prediction marker.
+        # While a live detection exists the target ring above is the marker,
+        # so the estimate is only drawn separately when coasting on prediction.
         if len(self._est_trail) > 1:
             prev = None
             n = len(self._est_trail)
@@ -305,7 +334,9 @@ class CameraView(QWidget):
                 wpt = to_widget(pt[0], pt[1])
                 if prev is not None:
                     alpha = int(60 + 140 * (i / n))
-                    p.setPen(QPen(QColor(0, 255, 120, alpha), 1))
+                    _tc = QColor(state_col)
+                    _tc.setAlpha(alpha)
+                    p.setPen(QPen(_tc, 2))
                     p.drawLine(prev[0], prev[1], wpt[0], wpt[1])
                 prev = wpt
         est = self._estimate
@@ -316,27 +347,31 @@ class CameraView(QWidget):
                 ex, ey = to_widget(est.pos_px[0], est.pos_px[1])
                 _coasting = (not _det_now_valid and tele is not None
                              and tele.predicted and tele.pred_fresh)
-                if _det_now_valid or _coasting:
-                    # white strokes only; coasting prediction is hollow/dashed
-                    # and explicitly tagged so it can't be mistaken for a fix
-                    if _coasting:
-                        p.setPen(QPen(QColor(255, 255, 255), 1, Qt.DashLine))
-                    else:
-                        p.setPen(QPen(QColor(255, 255, 255), 1))
-                    p.drawEllipse(ex - 7, ey - 7, 14, 14)
-                    if _coasting:
-                        self._draw_tag(p, ex + 10, ey - 10, "PREDICTED",
-                                       QColor("#9CA3AF"), clamp_top=vis_top,
-                                       clamp_right=vis_right - 4)
-                # velocity arrow (direction of motion, from filter velocity)
-                # drawn only while a live marker is shown (fix or fresh prediction)
+                if _coasting:
+                    # dashed config-sized box at the predicted position,
+                    # explicitly tagged so it can't be mistaken for a fix
+                    try:
+                        _px, _py = est.pos_px
+                        if _in_frame(_px, _py):
+                            _fx, _fy, _fw, _fh = _fallback_box(_px, _py)
+                            _fx0, _fy0 = to_widget(_fx, _fy)
+                            _fx1, _fy1 = to_widget(_fx + _fw, _fy + _fh)
+                            p.setBrush(Qt.NoBrush)
+                            p.setPen(QPen(state_col, 2, Qt.DashLine))
+                            p.drawRect(QRect(_fx0, _fy0, _fx1 - _fx0, _fy1 - _fy0))
+                    except Exception:
+                        pass
+                    self._draw_tag(p, ex + 12, ey - 12, "PREDICTED",
+                                   dim_col, clamp_top=vis_top,
+                                   clamp_right=vis_right - 4)
+                # velocity arrow (filter motion direction) in state color
                 try:
                     vx, vy = est.vel_angle  # deg/s
                     px_per_deg = (self._w / 4.0)
                     dx = float(vx) * px_per_deg * 0.25 * scale
                     dy = float(-vy) * px_per_deg * 0.25 * scale
                     if (_det_now_valid or _coasting) and (abs(dx) > 3 or abs(dy) > 3):
-                        p.setPen(QPen(QColor(255, 255, 255), 1))
+                        p.setPen(QPen(state_col, 1))
                         p.drawLine(ex, ey, int(ex + dx), int(ey + dy))
                         # arrowhead
                         import math
@@ -365,6 +400,7 @@ class WorldView(QWidget):
         self.target_trails = {}  # idx -> [world (x, y)]
         self._thumb = None  # downscaled full-scene RGB for background
         self.cam_res = (640, 480)
+        self.state_hex = "#FFFFFF"  # live state color (set each tick via set_state_color)
         self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -413,6 +449,15 @@ class WorldView(QWidget):
             self.trail = self.target_trails.get(0, self.trail)
         self.update()
 
+    def set_state_color(self, color_hex):
+        """Live track-state color driving footprint / primary trail / marker."""
+        try:
+            if color_hex:
+                QColor(color_hex)  # validate
+                self.state_hex = str(color_hex)
+        except Exception:
+            pass
+
     def update_state(self, camera, world_pos, trail=None):
         if camera is not None:
             try:
@@ -440,6 +485,7 @@ class WorldView(QWidget):
         self.all_world_pos = []
         self.target_trails.clear()
         self._thumb = None
+        self.state_hex = "#FFFFFF"
         self.update()
 
     def paintEvent(self, event):
@@ -469,13 +515,21 @@ class WorldView(QWidget):
         else:
             p.fillRect(self.rect(), QColor(10, 10, 10))
 
-        # trails for EVERY target (primary amber, others white)
+        # trails: primary in live state color, others dim white
+        try:
+            state_col = QColor(self.state_hex)
+        except Exception:
+            state_col = QColor(255, 255, 255)
         for idx in sorted(self.target_trails.keys()):
             tr = self.target_trails[idx]
             if len(tr) < 2:
                 continue
-            col = QColor(255, 180, 40, 170) if idx == 0 else QColor(255, 255, 255, 120)
-            p.setPen(QPen(col, 2 if idx == 0 else 1))
+            if idx == 0:
+                col = QColor(state_col)
+                col.setAlpha(180)
+                p.setPen(QPen(col, 2))
+            else:
+                p.setPen(QPen(QColor(255, 255, 255, 110), 1))
             prev = None
             for pt in tr:
                 x = ox + pt[0] * scale
@@ -484,17 +538,18 @@ class WorldView(QWidget):
                     p.drawLine(int(prev[0]), int(prev[1]), int(x), int(y))
                 prev = (x, y)
 
-        # camera footprint — white outline (exact design)
+        # camera footprint in live state color
         try:
             l, t, r, b = self.camera_bounds
             fx = ox + l * scale
             fy = oy + t * scale
             fw = (r - l) * scale
             fh = (b - t) * scale
-            p.setPen(QPen(QColor(255, 255, 255), 1))
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(state_col, 2))
             p.drawRect(int(fx), int(fy), int(fw), int(fh))
             p.setFont(QFont("Segoe UI", 7))
-            p.setPen(QColor(255, 255, 255))
+            p.setPen(state_col)
             rw, rh = self.cam_res
             # keep label visible when the footprint is cropped at the top
             _ly = max(0, int(fy) - 16)
@@ -502,15 +557,15 @@ class WorldView(QWidget):
         except Exception:
             pass
 
-        # ALL beacons with index tags (T1 primary, T2..Tn)
+        # beacons: primary diamond in state color, others small gray dots
         positions = self.all_world_pos or ([self.world_pos] if self.world_pos is not None else [])
         for idx, pt in enumerate(positions):
             try:
                 tx = ox + pt[0] * scale
                 ty = oy + pt[1] * scale
                 if idx == 0:
-                    p.setPen(QPen(QColor(255, 180, 40), 1))
-                    p.setBrush(QColor(255, 170, 20))
+                    p.setPen(QPen(state_col, 2))
+                    p.setBrush(state_col)
                     ix, iy = int(tx), int(ty)
                     p.save()
                     p.translate(ix, iy)
@@ -518,11 +573,11 @@ class WorldView(QWidget):
                     p.drawRect(-5, -5, 10, 10)
                     p.restore()
                 else:
-                    p.setPen(QPen(QColor(255, 255, 255), 1))
-                    p.setBrush(QColor(255, 255, 255))
+                    p.setPen(QPen(QColor(160, 160, 160), 1))
+                    p.setBrush(QColor(160, 160, 160))
                     p.drawEllipse(int(tx) - 3, int(ty) - 3, 6, 6)
                 p.setFont(QFont("Segoe UI", 7))
-                p.setPen(QColor(255, 255, 255))
+                p.setPen(state_col if idx == 0 else QColor(160, 160, 160))
                 p.drawText(int(tx) + 8, int(ty) - 8, 60, 14, Qt.AlignLeft,
                            f"TGT-{idx + 1:02d}")
             except Exception:

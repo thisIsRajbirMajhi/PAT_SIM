@@ -380,10 +380,15 @@ class MainWindow(QMainWindow):
             _tele.offset_px = None
         self.cam_view.set_frame(frame.image, detection=detection, estimate=estimate,
                                 show_overlays=True, meta={}, centre_offset=centre_offset,
-                                display=_dstate, telemetry=_tele)
+                                display=_dstate, telemetry=_tele,
+                                target_size_px=int(self.cfg["target"].get("size", 10)))
 
         world_pos = gt.world_pos if gt and gt.world_pos != (0, 0) else None
         cam_for_world = self.source.camera if isinstance(self.source, SyntheticSource) else None
+        try:
+            self.world_view.set_state_color(_dstate.color_hex)
+        except Exception:
+            pass
         if cam_for_world:
             self.world_view.update_state(cam_for_world, world_pos)
             # full scene: environment + ALL beacons, not just the primary target
