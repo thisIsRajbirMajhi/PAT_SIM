@@ -81,7 +81,7 @@ class Dashboard(QWidget):
         self._tele_vals = {}
         for _tkey, _caption in (("track_id", "TRACK ID"), ("det_conf", "DET CONF"),
                                 ("age", "TRACK AGE"), ("last", "LAST DETECT"),
-                                ("fov", "FOV STATUS")):
+                                ("fov", "FOV STATUS"), ("search", "SEARCH")):
             _box = QVBoxLayout()
             _box.setSpacing(4)
             _cap = QLabel(_caption)
@@ -156,7 +156,7 @@ class Dashboard(QWidget):
                        atmo_strength=0.0, gauss_std=0.0, spp_prob=0.0, poisson_enabled=False, platform_speed=0.0,
                        # live per-track telemetry for the bottom strip
                        track_label=None, det_conf=None, track_age_s=None,
-                       last_detect_age_s=None, fov=None):
+                       last_detect_age_s=None, fov=None, search_case=None):
         V = self._values
         V["state"].setText(str(state) if state is not None else "—")
         V["valid"].setText(f"{int(valid_detections)}")
@@ -232,3 +232,7 @@ class Dashboard(QWidget):
         T["last"].setText(f"{float(last_detect_age_s):.2f} s"
                           if last_detect_age_s is not None else "—")
         T["fov"].setText(str(fov) if fov is not None else "—")
+        try:
+            T["search"].setText(str(search_case) if search_case else "—")
+        except Exception:
+            pass

@@ -71,6 +71,17 @@ class IMM:
         xs = np.stack([self.models[n].x for n in self.model_names], axis=0)
         # covariance mixture: P = sum_i mu_i*(P_i + (x_i - x_fused)(...))
         fused = np.average(xs, axis=0, weights=self.probs)
+        # plausibility clamp: coasting on bad velocity during long outages
+        # must not drift outside the physical envelope (cf. X10 divergence).
+        try:
+            fused[0] = float(np.clip(fused[0], -12.0, 12.0))
+            fused[1] = float(np.clip(fused[1], -12.0, 12.0))
+            fused[2] = float(np.clip(fused[2], -15.0, 15.0))
+            fused[3] = float(np.clip(fused[3], -15.0, 15.0))
+            fused[4] = float(np.clip(fused[4], -60.0, 60.0))
+            fused[5] = float(np.clip(fused[5], -60.0, 60.0))
+        except Exception:
+            pass
         self.fused_x = fused
         # fused covariance approx weighted sum
         Ps = [self.models[n].P for n in self.model_names]
@@ -78,7 +89,52 @@ class IMM:
         for i, name in enumerate(self.model_names):
             diff = (self.models[name].x - fused).reshape(6, 1)
             P_fused += self.probs[i] * (Ps[i] + diff @ diff.T)
+        try:
+            d = np.clip(np.diag(P_fused), 1e-6, 400.0)
+            np.fill_diagonal(P_fused, d)
+        except Exception:
+            pass
         self.fused_P = P_fused
+
+    def reseed(self, z_px):
+        """Hard re-acquisition: anchor every model at the measurement with
+        fresh initial covariance (cf. X8 sweep-past encounter).
+
+        After a long outage the prior is pure accumulated process noise; a
+        Bayesian update against it produces an overconfident wrong velocity
+        (huge cross-covariance gain) that all later measurements then fail
+        to gate into. Re-seeding is the standard acquisition-vs-track split:
+        detect-then-initialize, not detect-then-update-a-fiction.
+        """
+        import math
+        try:
+            u, v = float(z_px[0]), float(z_px[1])
+            cv = self.models["CV"]
+            alpha = math.degrees(math.atan((u - cv.cx) / max(cv.fx, 1e-9)))
+            beta = math.degrees(math.atan((cv.cy - v) / max(cv.fy, 1e-9)))
+        except Exception:
+            alpha, beta = 0.0, 0.0
+        for m in self.models.values():
+            m.x = np.array([alpha, beta, 0.0, 0.0, 0.0, 0.0], dtype=float)
+            m.P = np.eye(6) * 5.0
+            m.P[2, 2] = m.P[3, 3] = 10.0
+            m.P[4, 4] = m.P[5, 5] = 20.0
+            m._last_nis = 0.0
+        self.probs = np.array([0.6, 0.25, 0.15], dtype=float)
+        self._fuse()
+        self.last_nis = 0.0
+        return self.fused_x.copy()
+
+    def update_config(self, cfg):
+        self.cfg = cfg
+        for m in self.models.values():
+            try:
+                m.update_config(cfg)
+            except Exception:
+                try:
+                    m.cfg = cfg
+                except Exception:
+                    pass
 
     def get_pixel(self):
         # use fused state to project

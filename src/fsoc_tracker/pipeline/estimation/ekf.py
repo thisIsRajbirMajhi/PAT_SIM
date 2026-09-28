@@ -12,6 +12,7 @@ class SimpleEKF:
     def __init__(self, cfg, mode="CV"):
         cam_res = tuple(cfg["camera"]["resolution"])
         fov = tuple(cfg["camera"]["fov_deg"])
+        self.cfg = cfg
         self.res_w, self.res_h = cam_res
         self.fov_h, self.fov_v = fov
         # focal lengths in px per radian approx: f = (W/2)/tan(FOV/2)
@@ -29,10 +30,57 @@ class SimpleEKF:
         self.P[4, 4] = self.P[5, 5] = 20
         # noises
         meas_noise = float(cfg["tracker"].get("meas_noise", 4.0))
-        self.R = np.eye(2) * (meas_noise ** 2)
+        self.R_base = np.eye(2) * (meas_noise ** 2)
         pn = float(cfg["tracker"].get("process_noise", 0.8))
         scale = {"CV": 0.6, "CA": 1.2, "MN": 3.0}.get(mode, 1.0)
         self.Q_base = pn * scale
+        self._last_nis = 0.0
+        # physical plausibility bounds (deg, deg/s, deg/s^2): gimbal max is
+        # 5-10 deg/s, world span is ~+-4 deg; anything beyond is divergence.
+        self.max_angle = 12.0
+        self.max_vel = 15.0
+        self.max_acc = 60.0
+        self.max_P_diag = 400.0
+
+    def update_config(self, cfg):
+        self.cfg = cfg
+        try:
+            self.dt = 1.0 / max(float(cfg["camera"]["fps"]), 1)
+        except Exception:
+            pass
+        try:
+            meas_noise = float(cfg["tracker"].get("meas_noise", 4.0))
+            self.R_base = np.eye(2) * (meas_noise ** 2)
+        except Exception:
+            pass
+        try:
+            pn = float(cfg["tracker"].get("process_noise", 0.8))
+            scale = {"CV": 0.6, "CA": 1.2, "MN": 3.0}.get(self.mode, 1.0)
+            self.Q_base = pn * scale
+        except Exception:
+            pass
+
+    def _jitter_var_px2(self):
+        """Camera jitter is white measurement noise: uniform(-j,+j) -> j^2/3."""
+        try:
+            j = float((self.cfg.get("camera", {}) or {}).get("jitter_px", 0.0) or 0.0)
+        except Exception:
+            j = 0.0
+        return (j * j) / 3.0 if j > 0 else 0.0
+
+    def _clamp_state(self):
+        self.x[0] = float(np.clip(self.x[0], -self.max_angle, self.max_angle))
+        self.x[1] = float(np.clip(self.x[1], -self.max_angle, self.max_angle))
+        self.x[2] = float(np.clip(self.x[2], -self.max_vel, self.max_vel))
+        self.x[3] = float(np.clip(self.x[3], -self.max_vel, self.max_vel))
+        self.x[4] = float(np.clip(self.x[4], -self.max_acc, self.max_acc))
+        self.x[5] = float(np.clip(self.x[5], -self.max_acc, self.max_acc))
+        # cap covariance growth so long outages cannot blow up the gate
+        try:
+            d = np.clip(np.diag(self.P), 1e-6, self.max_P_diag)
+            np.fill_diagonal(self.P, d)
+        except Exception:
+            pass
 
     def _F(self, dt):
         # state transition: constant acceleration model
@@ -67,8 +115,15 @@ class SimpleEKF:
             dt = self.dt
         F = self._F(dt)
         Q = self._Q(dt)
+        # adaptive process noise: sustained high NIS means maneuver/jitter —
+        # trust the model less so the filter stays agile instead of lagging.
+        try:
+            Q = Q * (1.0 + min(4.0, max(0.0, self._last_nis) / 8.0))
+        except Exception:
+            pass
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + Q
+        self._clamp_state()
         return self.x.copy()
 
     def _h(self, x):
@@ -100,10 +155,18 @@ class SimpleEKF:
         if z_px is None:
             # no update, inflate covariance slightly
             self.P += np.eye(6) * 0.3
+            self._last_nis = 0.0
+            self._clamp_state()
             return self.x.copy(), 0.0
         z = np.array(z_px, dtype=float)
-        # adapt R by confidence
-        R = self.R * (1.5 - 0.8 * confidence)  # high conf -> smaller R
+        # adapt R by confidence + camera jitter (white measurement noise)
+        R = self.R_base * (1.5 - 0.8 * confidence)  # high conf -> smaller R
+        try:
+            jv = self._jitter_var_px2()
+            if jv > 0:
+                R = R + np.eye(2) * jv
+        except Exception:
+            pass
         zpred = self._h(self.x)
         H = self._H(self.x)
         y = z - zpred  # innovation
@@ -114,12 +177,14 @@ class SimpleEKF:
         except Exception:
             invS = np.linalg.pinv(S)
         nis = float(y @ invS @ y)
+        self._last_nis = nis
         # outlier gate: if huge, reject
         gate = float(self.cfg_gate_sigma() ** 2 * 2) if hasattr(self, 'cfg_gate_sigma') else 36.0
         # we store gate externally; for now threshold 25 (5 sigma)
         if nis > 28:
             # reject measurement, increase covariance slightly
             self.P += np.eye(6) * 0.8
+            self._clamp_state()
             return self.x.copy(), nis
         K = self.P @ H.T @ invS
         self.x = self.x + K @ y
@@ -127,6 +192,7 @@ class SimpleEKF:
         self.P = (I - K @ H) @ self.P
         # ensure symmetry
         self.P = (self.P + self.P.T) / 2
+        self._clamp_state()
         return self.x.copy(), nis
 
     def cfg_gate_sigma(self):

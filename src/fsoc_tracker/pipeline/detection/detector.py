@@ -21,7 +21,7 @@ class BeaconDetector:
     def update_config(self, cfg):
         self.__init__(cfg)
 
-    def detect(self, frame_gray: np.ndarray, predicted_pos=None) -> Detection:
+    def detect(self, frame_gray: np.ndarray, predicted_pos=None, gate_radius_px=None) -> Detection:
         if frame_gray is None or frame_gray.size == 0:
             return Detection(valid=False)
         # Sr.2 Camera Type: monochrome or colour — handle both
@@ -94,6 +94,16 @@ class BeaconDetector:
                 dist = np.hypot(cx_det - px, cy_det - py)
             else:
                 dist = np.hypot(cx_det - cx, cy_det - cy)
+            # 3-sigma association gate: ignore bright clutter far from the
+            # prediction (crowded/star scenes). Cold search passes None.
+            if gate_radius_px is not None and predicted_pos is not None:
+                try:
+                    if float(dist) > float(gate_radius_px):
+                        if len(rejected) < 6:
+                            rejected.append((int(x), int(y), int(ww), int(hh), "GATED"))
+                        continue
+                except Exception:
+                    pass
             # scoring
             brightness_score = (peak / 255.0) * 0.3 + (mean_int / 255.0) * 0.2
             shape_score = fill * 0.2 + (1 - min(aspect - 1, 1)) * 0.1

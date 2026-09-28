@@ -45,7 +45,29 @@ def export_run(output_dir, cfg, metrics_collector):
                 r["model_probs"] = str(r["model_probs"])
                 r["gt_pos"] = str(r["gt_pos"])
                 r["est_pos"] = str(r["est_pos"])
+                r["raw_pos"] = str(r.get("raw_pos", ""))
                 writer.writerow(r)
+        # dedicated centroiding-error log (Benchmark-1/2)
+        with open(os.path.join(output_dir, "centroiding_error.csv"), "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["frame_id", "timestamp", "gt_x", "gt_y",
+                             "raw_x", "raw_y", "fused_x", "fused_y",
+                             "centroid_error_px", "tracking_error_px",
+                             "detection_valid", "tracking_state", "confidence"])
+            for f in metrics_collector.frames:
+                gt = f.get("gt_pos")
+                raw = f.get("raw_pos")
+                est = f.get("est_pos")
+                writer.writerow([
+                    f.get("frame_id"), f.get("timestamp"),
+                    gt[0] if gt else "", gt[1] if gt else "",
+                    raw[0] if raw else "", raw[1] if raw else "",
+                    est[0] if est else "", est[1] if est else "",
+                    f.get("centroid_error_px") if f.get("centroid_error_px") is not None else "",
+                    f.get("error_px") if f.get("error_px") is not None else "",
+                    int(bool(f.get("detection_valid"))), f.get("tracking_state", ""),
+                    f.get("detection_confidence", 0),
+                ])
         # events json
         events = [{"frame_id": f["frame_id"], "state": f["tracking_state"], "error": f["error_px"]} for f in metrics_collector.frames]
         with open(os.path.join(output_dir, "events.json"), "w") as f:

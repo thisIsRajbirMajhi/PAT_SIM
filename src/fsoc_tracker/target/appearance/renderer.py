@@ -11,7 +11,7 @@ World.render_world() computes it from the atmosphere config.
 import cv2
 import numpy as np
 
-from .shapes import draw_beacon
+from .shapes import draw_beacon, normalize_shape
 
 #: fixed beacon core peak (before atmosphere dimming) — kept simple by design
 PEAK_INTENSITY = 255
@@ -47,7 +47,8 @@ class BeaconRenderer:
         self.size = int(cfg["target"]["size"])
         self.intensity = PEAK_INTENSITY
         shape = cfg["target"].get("shape", "square")
-        self.shape = shape if shape == "circle" else "square"
+        self.shape = normalize_shape(shape)
+        self.custom_polygon = cfg["target"].get("custom_polygon")
         self.bg = int(cfg["world"].get("background", 18))
 
     def draw(self, img, positions, w, h, intensity_scale=1.0):
@@ -59,7 +60,8 @@ class BeaconRenderer:
             if not (0 <= x < w and 0 <= y < h):
                 continue
             glow = int(np.clip(round((self.bg + 45) * float(intensity_scale)), 0, 255))
-            draw_beacon(img, x, y, self.shape, half, glow, peak)
+            draw_beacon(img, x, y, self.shape, half, glow, peak,
+                        custom_polygon=self.custom_polygon)
             # diffuse the glow halo, then restore the sharp core (single pass each)
             x0 = max(0, x - half - 3); y0 = max(0, y - half - 3)
             x1 = min(w, x + half + 4); y1 = min(h, y + half + 4)
@@ -73,6 +75,17 @@ class BeaconRenderer:
         peak = self.intensity if peak is None else int(peak)
         if self.shape == "circle":
             cv2.circle(img, (x, y), half, peak, -1)
+        elif self.shape in ("diamond", "triangle", "custom"):
+            from .shapes import _poly_points
+            pts = _poly_points(x, y, self.shape, half, self.custom_polygon)
+            if pts is not None:
+                cv2.fillPoly(img, [pts], peak)
+            else:
+                cv2.rectangle(img, (x - half, y - half), (x + half, y + half), peak, -1)
+        elif self.shape == "cross":
+            t = max(1, half // 2)
+            cv2.rectangle(img, (x - half, y - t), (x + half, y + t), peak, -1)
+            cv2.rectangle(img, (x - t, y - half), (x + t, y + half), peak, -1)
         else:
             cv2.rectangle(img, (x - half, y - half), (x + half, y + half), peak, -1)
 

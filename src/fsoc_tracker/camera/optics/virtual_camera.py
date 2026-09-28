@@ -78,6 +78,25 @@ class VirtualCamera:
         top = self.center_world[1] - self.res_h / 2
         return (left, top, left + self.res_w, top + self.res_h)
 
+    def is_at_limit(self, pan_rate=0.0, tilt_rate=0.0):
+        """True when the viewport is clamped at a world edge and the command
+        pushes further outward (search would grind against the wall)."""
+        try:
+            hw, hh = self.res_w / 2.0, self.res_h / 2.0
+            cx, cy = float(self.center_world[0]), float(self.center_world[1])
+            at_left = cx <= hw + 1.0
+            at_right = cx >= self.world_w - hw - 1.0
+            at_top = cy <= hh + 1.0
+            at_bottom = cy >= self.world_h - hh - 1.0
+            # pan+ moves viewport +x; tilt+ moves viewport -y (see _update_center)
+            push_out = ((at_left and float(pan_rate) < 0)
+                        or (at_right and float(pan_rate) > 0)
+                        or (at_top and float(tilt_rate) > 0)
+                        or (at_bottom and float(tilt_rate) < 0))
+            return bool((at_left or at_right or at_top or at_bottom) and push_out)
+        except Exception:
+            return False
+
     def extract_viewport(self, world_image: np.ndarray):
         l, t, r, b = map(int, self.get_viewport_bounds())
         # world_image is HxW grayscale

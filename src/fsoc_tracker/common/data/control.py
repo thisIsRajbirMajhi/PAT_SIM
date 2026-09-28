@@ -7,3 +7,4 @@ class ControlCommand:
     tilt_rate: float = 0.0
     saturated: bool = False
     search_mode: bool = False
+    search_case: str = ""

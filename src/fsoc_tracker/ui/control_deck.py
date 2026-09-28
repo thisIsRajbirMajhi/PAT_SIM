@@ -178,7 +178,13 @@ class ControlDeck(QDialog):
             # Target
             self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
             self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
-            self.tgt_shape_combo.setCurrentText(self.cfg["target"].get("shape","square") if self.cfg["target"].get("shape","square") in ("square","circle") else "square")
+            _sh = self.cfg["target"].get("shape","square")
+            self.tgt_shape_combo.setCurrentText(_sh if _sh in ("square","circle","diamond","cross","triangle","custom") else "square")
+            try:
+                _poly = self.cfg["target"].get("custom_polygon")
+                self.custom_poly_edit.setText("; ".join(f"{p[0]},{p[1]}" for p in _poly) if _poly else "")
+            except Exception:
+                pass
             self.size_spin.setValue(int(self.cfg["target"].get("size",10)))
             self.tgt_init_mode_combo.setCurrentText(self.cfg["target"].get("initial_mode","random"))
             ip = self.cfg["target"].get("initial_pos")
@@ -186,6 +192,13 @@ class ControlDeck(QDialog):
                 self.tgt_init_x_spin.setValue(int(ip[0])); self.tgt_init_y_spin.setValue(int(ip[1]))
             self.traj_combo.setCurrentText(self.cfg["target"].get("trajectory","circular"))
             self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file","") or "")
+            try:
+                _dt = self.cfg["target"].get("distractor_trajectory")
+                self.distractor_traj_combo.setCurrentText(_dt if _dt else "(follow primary)")
+                _pl = self.cfg["target"].get("trajectories")
+                self.per_traj_edit.setText(",".join(_pl) if _pl else "")
+            except Exception:
+                pass
             self.speed_spin.setValue(float(self.cfg["target"].get("speed_px_per_frame",2.8)))
             if hasattr(self, "blink_spin"):
                 self.blink_spin.setValue(float(self.cfg["target"].get("blink_rate_hz",0.0)))
@@ -244,9 +257,30 @@ class ControlDeck(QDialog):
             self.spp_check.setChecked(bool(self.cfg["noise"].get("salt_pepper_enabled",False)))
             self.spp_spin.setValue(float(self.cfg["noise"].get("salt_pepper_prob",0)))
             self.poisson_check.setChecked(bool(self.cfg["noise"].get("poisson",False)))
+            # Controller + estimator + smart search
+            try:
+                _cc = self.cfg.get("controller", {}) or {}
+                self.kp_pan_spin.setValue(float(_cc.get("kp_pan", 1.2)))
+                self.kp_tilt_spin.setValue(float(_cc.get("kp_tilt", 1.2)))
+                self.ki_spin.setValue(float(_cc.get("ki", 0.05)))
+                self.kd_spin.setValue(float(_cc.get("kd", 0.15)))
+                self.dead_spin.setValue(float(_cc.get("deadzone_px", 2.0)))
+                if hasattr(self, "search_rmax_spin"):
+                    self.search_rmax_spin.setValue(float(_cc.get("search_radius_max", 4.5)))
+                    self.spiral_phase_spin.setValue(float(_cc.get("spiral_phase_s", 3.0)))
+                    self.stare_spin.setValue(float(_cc.get("stare_rate_scale", 0.3)))
+                    self.intercept_spin.setValue(float(_cc.get("intercept_gain", 2.0)))
+                    self.giveup_spin.setValue(int(_cc.get("give_up_frames", 600)))
+            except Exception:
+                pass
             # Input
             self.input_combo.setCurrentText(self.cfg["experiment"].get("input_mode","SYNTHETIC"))
             self.video_path_edit.setText(self.cfg["experiment"].get("video_path",""))
+            try:
+                self.video_ann_edit.setText(self.cfg["experiment"].get("video_annotations_path","") or "")
+                self.video_native_check.setChecked(bool(self.cfg["experiment"].get("video_native_fps", False)))
+            except Exception:
+                pass
             self.vid_centre_x_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_x",0)))
             self.vid_centre_y_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_y",0)))
         except Exception as e:
@@ -272,6 +306,40 @@ class ControlDeck(QDialog):
         except Exception as e:
             QMessageBox.warning(self,"Save Failed", str(e))
 
+    def _parse_custom_polygon(self):
+        txt = self.custom_poly_edit.text().strip() if hasattr(self, "custom_poly_edit") else ""
+        if not txt:
+            return None
+        pts = []
+        for part in txt.replace(",", " ").split(";"):
+            part = part.strip()
+            if not part:
+                continue
+            nums = part.split()
+            if len(nums) >= 2:
+                try:
+                    pts.append([float(nums[0]), float(nums[1])])
+                except Exception:
+                    continue
+        # fallback: comma-separated flat list x1,y1,x2,y2,...
+        if not pts and "," in txt:
+            try:
+                flat = [float(x) for x in txt.replace(";", ",").split(",") if x.strip() != ""]
+                for i in range(0, len(flat) - 1, 2):
+                    pts.append([flat[i], flat[i + 1]])
+            except Exception:
+                return None
+        return pts if len(pts) >= 3 else None
+
+    def _parse_per_traj_list(self, count):
+        txt = self.per_traj_edit.text().strip() if hasattr(self, "per_traj_edit") else ""
+        if not txt:
+            return None
+        items = [s.strip() for s in txt.split(",") if s.strip() != ""]
+        if len(items) != count:
+            return None
+        return items
+
     def _apply_to_cfg(self, c):
         # Helper to sync current UI widgets into a cfg dict (used by Save As)
         try:
@@ -294,7 +362,15 @@ class ControlDeck(QDialog):
             for _k in ("angle_deg", "radius", "intensity",
                        "sinusoidal_amplitude", "sinusoidal_wavelength"):
                 c["target"].pop(_k, None)
-            c["target"]["custom_polygon"] = None
+            # user-defined beacon shape polygon
+            if c["target"]["shape"] == "custom":
+                c["target"]["custom_polygon"] = self._parse_custom_polygon()
+            else:
+                c["target"]["custom_polygon"] = None
+            # per-target motion independence
+            _dtxt = self.distractor_traj_combo.currentText() if hasattr(self, "distractor_traj_combo") else "(follow primary)"
+            c["target"]["distractor_trajectory"] = None if _dtxt == "(follow primary)" else _dtxt
+            c["target"]["trajectories"] = self._parse_per_traj_list(int(c["target"]["count"]))
             if c["target"]["trajectory"] == "user-defined":
                 c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None
             else:
@@ -318,10 +394,17 @@ class ControlDeck(QDialog):
         self.tgt_type_combo = QComboBox(); self.tgt_type_combo.addItems(["beacon_spot"]); self.tgt_type_combo.setCurrentText(self.cfg["target"].get("type","beacon_spot"))
         # Number of Targets 1 mandatory, 1-5 optional multiple (independent trajectories)
         self.tgt_count_spin = QSpinBox(); self.tgt_count_spin.setRange(1,5); self.tgt_count_spin.setValue(int(self.cfg["target"].get("count",1)))
-        # Shape: square (default) | circle
-        self.tgt_shape_combo = QComboBox(); self.tgt_shape_combo.addItems(["square","circle"])
+        # Shape: square (default) | circle | diamond | cross | triangle | custom
+        self.tgt_shape_combo = QComboBox(); self.tgt_shape_combo.addItems(["square","circle","diamond","cross","triangle","custom"])
         _shape = self.cfg["target"].get("shape","square")
-        self.tgt_shape_combo.setCurrentText(_shape if _shape in ("square","circle") else "square")
+        self.tgt_shape_combo.setCurrentText(_shape if _shape in ("square","circle","diamond","cross","triangle","custom") else "square")
+        self.custom_poly_edit = QLineEdit()
+        self.custom_poly_edit.setPlaceholderText("Custom polygon: x1,y1; x2,y2; ... (offsets px)")
+        try:
+            _poly = self.cfg["target"].get("custom_polygon")
+            self.custom_poly_edit.setText("; ".join(f"{p[0]},{p[1]}" for p in _poly) if _poly else "")
+        except Exception:
+            self.custom_poly_edit.setText("")
         # Size 5-20 default 10
         self.size_spin = QSpinBox(); self.size_spin.setRange(5,20); self.size_spin.setValue(int(self.cfg["target"]["size"]))
         # Initial Location user-defined default Random
@@ -335,27 +418,45 @@ class ControlDeck(QDialog):
         self.traj_combo = QComboBox(); self.traj_combo.addItems(["straight","circular","figure_eight","random","spiral","sinusoidal","user-defined"])
         self.traj_combo.setCurrentText(self.cfg["target"]["trajectory"])
         self.custom_traj_edit = QLineEdit(); self.custom_traj_edit.setPlaceholderText("CSV path: x,y per row  or  t,x,y")
-        self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file", ""))
+        self.custom_traj_edit.setText(self.cfg["target"].get("custom_trajectory_file", "") or "")
         self.btn_traj_file = QPushButton("Browse…")
         traj_hbox = QHBoxLayout(); traj_hbox.addWidget(self.custom_traj_edit); traj_hbox.addWidget(self.btn_traj_file)
+        # Per-target independence (Sr.8): optional distractor motion + per-target list
+        self.distractor_traj_combo = QComboBox()
+        self.distractor_traj_combo.addItems(["(follow primary)", "straight","circular","figure_eight","random","spiral","sinusoidal","user-defined"])
+        _dt = self.cfg["target"].get("distractor_trajectory")
+        self.distractor_traj_combo.setCurrentText(_dt if _dt else "(follow primary)")
+        self.per_traj_edit = QLineEdit()
+        self.per_traj_edit.setPlaceholderText("Per-target list e.g. straight,circular,random (count items)")
+        try:
+            _pl = self.cfg["target"].get("trajectories")
+            self.per_traj_edit.setText(",".join(_pl) if _pl else "")
+        except Exception:
+            self.per_traj_edit.setText("")
         self.speed_spin = QDoubleSpinBox(); self.speed_spin.setRange(0,20); self.speed_spin.setSingleStep(0.5); self.speed_spin.setValue(float(self.cfg["target"]["speed_px_per_frame"]))
         self.blink_spin = QDoubleSpinBox(); self.blink_spin.setRange(0,50); self.blink_spin.setSingleStep(0.5); self.blink_spin.setValue(float(self.cfg["target"].get("blink_rate_hz",0.0)))
         f.addRow("Target Type", self.tgt_type_combo)
         f.addRow("Target Count", self.tgt_count_spin)
         f.addRow("Target Shape", self.tgt_shape_combo)
+        f.addRow("Custom Polygon", self.custom_poly_edit)
         f.addRow("Target Size", self.size_spin)
         f.addRow("Initial Position Mode", self.tgt_init_mode_combo)
         f.addRow("  Init X", self.tgt_init_x_spin); f.addRow("  Init Y", self.tgt_init_y_spin)
         f.addRow("Motion Trajectory", self.traj_combo)
+        f.addRow("Distractor Motion (2..N)", self.distractor_traj_combo)
+        f.addRow("Per-Target Motions", self.per_traj_edit)
         f.addRow("Custom Trajectory CSV", traj_hbox)
         f.addRow("Speed (px/frame)", self.speed_spin)
         f.addRow("Blink Rate (Hz, 0=steady)", self.blink_spin)
-        # Show/hide custom trajectory row based on selection
+        # Show/hide custom rows based on selection
         def _update_target_custom_rows():
             is_user_traj = self.traj_combo.currentText() == "user-defined"
             self.custom_traj_edit.setVisible(is_user_traj)
             self.btn_traj_file.setVisible(is_user_traj)
+            is_custom_shape = self.tgt_shape_combo.currentText() == "custom"
+            self.custom_poly_edit.setVisible(is_custom_shape)
         self.traj_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
+        self.tgt_shape_combo.currentTextChanged.connect(lambda _: _update_target_custom_rows())
         self.btn_traj_file.clicked.connect(self._browse_traj)
         _update_target_custom_rows()
         return w
@@ -409,6 +510,16 @@ class ControlDeck(QDialog):
         f.addRow("Ki", self.ki_spin); f.addRow("Kd", self.kd_spin)
         f.addRow("Deadzone px", self.dead_spin)
         f.addRow("Process noise", self.proc_spin); f.addRow("Meas noise", self.meas_spin)
+        # smart-search routing (ranges mirror config/validation/controller.py)
+        _sc = self.cfg.get("controller", {}) or {}
+        self.search_rmax_spin = QDoubleSpinBox(); self.search_rmax_spin.setRange(1.0,8.0); self.search_rmax_spin.setSingleStep(0.1); self.search_rmax_spin.setValue(float(_sc.get("search_radius_max", 4.5)))
+        self.spiral_phase_spin = QDoubleSpinBox(); self.spiral_phase_spin.setRange(1.0,10.0); self.spiral_phase_spin.setSingleStep(0.5); self.spiral_phase_spin.setValue(float(_sc.get("spiral_phase_s", 3.0)))
+        self.stare_spin = QDoubleSpinBox(); self.stare_spin.setRange(0.05,1.0); self.stare_spin.setSingleStep(0.05); self.stare_spin.setValue(float(_sc.get("stare_rate_scale", 0.3)))
+        self.intercept_spin = QDoubleSpinBox(); self.intercept_spin.setRange(0.5,5.0); self.intercept_spin.setSingleStep(0.1); self.intercept_spin.setValue(float(_sc.get("intercept_gain", 2.0)))
+        self.giveup_spin = QSpinBox(); self.giveup_spin.setRange(60,3600); self.giveup_spin.setSingleStep(30); self.giveup_spin.setValue(int(_sc.get("give_up_frames", 600)))
+        f.addRow("Search radius max", self.search_rmax_spin); f.addRow("Spiral phase s", self.spiral_phase_spin)
+        f.addRow("Stare scale", self.stare_spin); f.addRow("Intercept gain", self.intercept_spin)
+        f.addRow("Give-up frames", self.giveup_spin)
         return w
 
     def _env_tab(self):
@@ -533,6 +644,14 @@ class ControlDeck(QDialog):
         h = QHBoxLayout(); h.addWidget(self.video_path_edit); h.addWidget(self.btn_browse)
         f.addRow("Input mode", self.input_combo)
         f.addRow("Video path", h)
+        self.video_ann_edit = QLineEdit(self.cfg["experiment"].get("video_annotations_path","") or "")
+        self.video_ann_edit.setPlaceholderText("Annotations CSV: frame_id,x,y[,visible] (Benchmark-2)")
+        self.btn_browse_ann = QPushButton("Browse…")
+        hann = QHBoxLayout(); hann.addWidget(self.video_ann_edit); hann.addWidget(self.btn_browse_ann)
+        f.addRow("Video annotations", hann)
+        self.video_native_check = QCheckBox("Use native video FPS (default: normalize to 30fps)")
+        self.video_native_check.setChecked(bool(self.cfg["experiment"].get("video_native_fps", False)))
+        f.addRow(self.video_native_check)
         # Video centre calibration (for external mp4 where image centre may be offset)
         self.vid_centre_x_spin = QDoubleSpinBox(); self.vid_centre_x_spin.setRange(-100,100); self.vid_centre_x_spin.setSingleStep(1); self.vid_centre_x_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_x",0)))
         self.vid_centre_y_spin = QDoubleSpinBox(); self.vid_centre_y_spin.setRange(-100,100); self.vid_centre_y_spin.setSingleStep(1); self.vid_centre_y_spin.setValue(float(self.cfg["camera"].get("video_centre_offset_y",0)))
@@ -540,7 +659,12 @@ class ControlDeck(QDialog):
         f.addRow("Video centre offset Y (px)", self.vid_centre_y_spin)
         f.addRow(QLabel("Calibrates image centre for mp4 input (0,0 = frame centre)"))
         self.btn_browse.clicked.connect(self._browse)
+        self.btn_browse_ann.clicked.connect(self._browse_ann)
         return w
+
+    def _browse_ann(self):
+        p,_ = QFileDialog.getOpenFileName(self, "Select annotations CSV", "", "CSV (*.csv);;All (*.*)")
+        if p: self.video_ann_edit.setText(p)
 
     def _browse(self):
         p,_ = QFileDialog.getOpenFileName(self, "Select video", "", "Video (*.mp4 *.avi *.mov)")
@@ -576,8 +700,18 @@ class ControlDeck(QDialog):
         for _k in ("angle_deg", "radius", "intensity",
                    "sinusoidal_amplitude", "sinusoidal_wavelength"):
             c["target"].pop(_k, None)
-        # Beacon shape is square|circle only (custom polygons removed)
-        c["target"]["custom_polygon"] = None
+        # User-defined beacon shape polygon (Sr.9)
+        if c["target"]["shape"] == "custom":
+            c["target"]["custom_polygon"] = self._parse_custom_polygon()
+        else:
+            c["target"]["custom_polygon"] = None
+        # Per-target motion independence (Sr.8)
+        _dtxt = self.distractor_traj_combo.currentText() if hasattr(self, "distractor_traj_combo") else "(follow primary)"
+        c["target"]["distractor_trajectory"] = None if _dtxt == "(follow primary)" else _dtxt
+        try:
+            c["target"]["trajectories"] = self._parse_per_traj_list(int(c["target"]["count"]))
+        except Exception:
+            c["target"]["trajectories"] = None
         # User-defined trajectory: custom CSV file
         if c["target"]["trajectory"] == "user-defined":
             c["target"]["custom_trajectory_file"] = self.custom_traj_edit.text().strip() or None
@@ -603,6 +737,12 @@ class ControlDeck(QDialog):
         c["controller"]["ki"] = float(self.ki_spin.value())
         c["controller"]["kd"] = float(self.kd_spin.value())
         c["controller"]["deadzone_px"] = float(self.dead_spin.value())
+        if hasattr(self, "search_rmax_spin"):
+            c["controller"]["search_radius_max"] = float(self.search_rmax_spin.value())
+            c["controller"]["spiral_phase_s"] = float(self.spiral_phase_spin.value())
+            c["controller"]["stare_rate_scale"] = float(self.stare_spin.value())
+            c["controller"]["intercept_gain"] = float(self.intercept_spin.value())
+            c["controller"]["give_up_frames"] = int(self.giveup_spin.value())
         c["tracker"]["process_noise"] = float(self.proc_spin.value())
         c["tracker"]["meas_noise"] = float(self.meas_spin.value())
         # env — world + platform + stars/gradient/vignetting/brightness
@@ -653,6 +793,11 @@ class ControlDeck(QDialog):
         c["experiment"]["duration_s"] = float(self.duration_spin.value())
         c["experiment"]["input_mode"] = self.input_combo.currentText()
         c["experiment"]["video_path"] = self.video_path_edit.text().strip()
+        try:
+            c["experiment"]["video_annotations_path"] = self.video_ann_edit.text().strip()
+            c["experiment"]["video_native_fps"] = bool(self.video_native_check.isChecked())
+        except Exception:
+            pass
         c["camera"]["video_centre_offset_x"] = float(self.vid_centre_x_spin.value())
         c["camera"]["video_centre_offset_y"] = float(self.vid_centre_y_spin.value())
         self.configApplied.emit(c)

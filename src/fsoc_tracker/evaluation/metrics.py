@@ -15,6 +15,7 @@ class MetricsCollector:
         self._last_state = None
         self.proc_times = []
         self.errors = []
+        self.centroid_errors = []
         self.t_acq_start = time.perf_counter()
         self.saturation_count = 0
         self.loss_count = 0
@@ -23,6 +24,9 @@ class MetricsCollector:
         self.confidences = []
         self.input_fps = 30.0
         self.dropped_frames = 0
+        self.search_case_counts = {}
+        self.first_detect_frame = None
+        self.first_lock_frame = None
 
     def start_run(self):
         self.reset()
@@ -31,10 +35,17 @@ class MetricsCollector:
         # keep input_fps if already set
         self.input_fps = getattr(self, 'input_fps', 30.0)
 
-    def update(self, frame_id, timestamp, detection_valid, estimate, ground_truth, processing_ms, fps, pan_rate, tilt_rate, detection_confidence=0.0, saturated=False, input_fps=30.0):
+    def update(self, frame_id, timestamp, detection_valid, estimate, ground_truth, processing_ms, fps, pan_rate, tilt_rate, detection_confidence=0.0, saturated=False, input_fps=30.0, detection_centroid=None, search_case=None):
         # error
         err = None
         err_angle = None
+        centroid_err = None
+        raw_pos = None
+        if detection_centroid is not None:
+            try:
+                raw_pos = (float(detection_centroid[0]), float(detection_centroid[1]))
+            except Exception:
+                raw_pos = None
         lock_valid = False
         if detection_valid and ground_truth and ground_truth.image_pos and estimate.pos_px:
             # detection error vs truth? Use estimate pixel vs truth for tracking error
@@ -50,6 +61,12 @@ class MetricsCollector:
             err_angle = float(np.hypot(estimate.pos_angle[0], estimate.pos_angle[1]))
             self.errors.append(err)
             lock_valid = estimate.tracking_state.value in ("LOCKED","ACQUIRING") and detection_valid
+            if raw_pos is not None:
+                try:
+                    centroid_err = float(np.hypot(raw_pos[0]-gt[0], raw_pos[1]-gt[1]))
+                    self.centroid_errors.append(centroid_err)
+                except Exception:
+                    centroid_err = None
         elif ground_truth and ground_truth.image_pos is None:
             # target outside FOV -> no error, count as loss
             pass
@@ -94,13 +111,33 @@ class MetricsCollector:
 
         self._last_state = estimate.tracking_state
         self.proc_times.append(processing_ms)
+        # smart-search telemetry (per-case counts + time-to-first-detect/lock)
+        try:
+            case_name = ""
+            if search_case is not None:
+                case_name = getattr(search_case, "value", search_case)
+                case_name = str(case_name or "")
+            if case_name:
+                self.search_case_counts[case_name] = int(self.search_case_counts.get(case_name, 0)) + 1
+        except Exception:
+            case_name = ""
+        try:
+            if detection_valid and self.first_detect_frame is None:
+                self.first_detect_frame = int(frame_id)
+            if cur_state == "LOCKED" and self.first_lock_frame is None:
+                self.first_lock_frame = int(frame_id)
+        except Exception:
+            pass
         entry = {
             "frame_id": frame_id,
             "timestamp": timestamp,
             "detection_valid": bool(detection_valid),
             "detection_confidence": float(detection_confidence or 0.0),
             "tracking_state": cur_state,
+            "search_case": case_name,
             "error_px": err,
+            "centroid_error_px": centroid_err,
+            "raw_pos": raw_pos,
             "error_angle_deg": err_angle,
             "processing_ms": processing_ms,
             "fps": fps,
@@ -126,6 +163,11 @@ class MetricsCollector:
         rmse = float(np.sqrt(np.mean(np.square(valid_errors)))) if valid_errors else 0.0
         max_err = float(np.max(valid_errors)) if valid_errors else 0.0
         p95 = float(np.percentile(valid_errors,95)) if valid_errors else 0.0
+        centroid_vals = [e for e in getattr(self, "centroid_errors", []) if e is not None]
+        centroid_mean = float(np.mean(centroid_vals)) if centroid_vals else 0.0
+        centroid_rmse = float(np.sqrt(np.mean(np.square(centroid_vals)))) if centroid_vals else 0.0
+        centroid_max = float(np.max(centroid_vals)) if centroid_vals else 0.0
+        centroid_p95 = float(np.percentile(centroid_vals, 95)) if centroid_vals else 0.0
         avg_proc = float(np.mean(self.proc_times)) if self.proc_times else 0.0
         max_proc = float(np.max(self.proc_times)) if self.proc_times else 0.0
         fps_vals = [f["fps"] for f in self.frames if f["fps"]>0]
@@ -160,6 +202,10 @@ class MetricsCollector:
             "rmse_px": rmse,
             "max_error_px": max_err,
             "p95_error_px": p95,
+            "centroid_mean_error_px": centroid_mean,
+            "centroid_rmse_px": centroid_rmse,
+            "centroid_max_error_px": centroid_max,
+            "centroid_p95_error_px": centroid_p95,
             "lock_retention_pct": 100*locked/max(total,1),
             "target_loss_pct": loss_pct,
             "valid_detection_pct": 100*valid_det/max(total,1),
@@ -169,4 +215,7 @@ class MetricsCollector:
             "max_processing_ms": max_proc,
             "saturation_count": int(self.saturation_count),
             "locked_frames": locked,
+            "search_case_counts": dict(self.search_case_counts),
+            "first_detect_frame": self.first_detect_frame,
+            "first_lock_frame": self.first_lock_frame,
         }

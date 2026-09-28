@@ -131,7 +131,7 @@ class MainWindow(QMainWindow):
                    "mean_max", "rmse_p95", "lock", "loss", "acq", "reacq"):
             _hidden = QLabel("—")
             self._values[_k] = _hidden
-        for _k in ("track_id", "det_conf", "age", "last", "fov"):
+        for _k in ("track_id", "det_conf", "age", "last", "fov", "search"):
             _hidden = QLabel("—")
             self._tele_vals[_k] = _hidden
 
@@ -174,6 +174,10 @@ class MainWindow(QMainWindow):
         self.last_estimate = None
         self.last_gt = None
         self._overlays_enabled = True
+        # Sr.15 control-rate hold: sensor runs at fps, gimbal at update_interval_hz
+        self._tick_id = 0
+        self._last_cmd = None
+        self._latched = False
         self._create_source()
 
     def _create_source(self):
@@ -187,8 +191,11 @@ class MainWindow(QMainWindow):
             try:
                 cx_off = float(self.cfg["camera"].get("video_centre_offset_x", 0))
                 cy_off = float(self.cfg["camera"].get("video_centre_offset_y", 0))
+                ann = (self.cfg["experiment"].get("video_annotations_path") or "").strip() or None
+                native = bool(self.cfg["experiment"].get("video_native_fps", False))
                 self.source = VideoSource(self.cfg["experiment"]["video_path"],
-                                          centre_offset_x=cx_off, centre_offset_y=cy_off)
+                                          centre_offset_x=cx_off, centre_offset_y=cy_off,
+                                          annotations_path=ann, native_fps=native)
                 self.cfg["camera"]["resolution"] = list(self.source.resolution)
             except Exception as e:
                 QMessageBox.warning(self, "Video error", str(e))
@@ -222,6 +229,9 @@ class MainWindow(QMainWindow):
             self.auto_logger.begin_run(self.cfg)
             self.tracker.reset()
             self.controller.reset()
+            self._tick_id = 0
+            self._last_cmd = None
+            self._latched = False
             if hasattr(self.source, "reset"):
                 self.source.reset()
             # coarse cue: target starts rendered in Camera FOV, loop centers it
@@ -266,6 +276,9 @@ class MainWindow(QMainWindow):
         self.metrics.input_fps = float(self.cfg["camera"]["fps"])
         self.tracker.reset()
         self.controller.reset()
+        self._tick_id = 0
+        self._last_cmd = None
+        self._latched = False
         if self.source and hasattr(self.source, "reset"):
             self.source.reset()
         self.display.reset()
@@ -307,12 +320,35 @@ class MainWindow(QMainWindow):
             return
 
         pred = self.tracker.get_predicted_pixel() if hasattr(self.tracker, "get_predicted_pixel") else None
-        detection = self.detector.detect(frame.image, predicted_pos=pred)
-        estimate = self.tracker.step(detection, frame)
+        try:
+            _miss0 = int(getattr(getattr(self.tracker, "sm", None), "missed", 0))
+        except Exception:
+            _miss0 = 0
+        try:
+            _fresh = bool(getattr(self, "_latched", False)) and _miss0 <= 30
+            _gate = self.tracker.get_gate_radius_px(missed=_miss0) if (hasattr(self.tracker, "get_gate_radius_px") and _fresh) else None
+        except Exception:
+            _gate = None
+        try:
+            detection = self.detector.detect(frame.image, predicted_pos=pred, gate_radius_px=_gate)
+        except TypeError:
+            detection = self.detector.detect(frame.image, predicted_pos=pred)
+        try:
+            from ..target.dynamics.visibility import is_blink_off as _boff, is_hidden as _hid
+            _hold = bool(_boff(getattr(frame, "frame_id", 0), self.cfg) or _hid(getattr(frame, "frame_id", 0), self.cfg))
+        except Exception:
+            _hold = False
+        try:
+            estimate = self.tracker.step(detection, frame, hold=False)
+        except TypeError:
+            estimate = self.tracker.step(detection, frame)
+        try:
+            if getattr(estimate.tracking_state, "value", "") == "LOCKED":
+                self._latched = True
+        except Exception:
+            pass
 
-        dt = 1.0 / max(float(self.cfg["camera"]["fps"]), 1)
-        cmd = self.controller.step(estimate, dt=dt)
-        # FOV geometry for this exact frame (pre-move camera matches frame_img)
+        # FOV geometry for this exact frame (camera still pre-move, matches frame_img)
         _in_fov = None
         try:
             if isinstance(self.source, SyntheticSource) and gt is not None \
@@ -322,9 +358,53 @@ class MainWindow(QMainWindow):
                 _in_fov = True if detection.valid else None
         except Exception:
             _in_fov = None
+        try:
+            _lim = bool(self.source.camera.is_at_limit(
+                getattr(self.controller, "prev_pan_rate", 0.0),
+                getattr(self.controller, "prev_tilt_rate", 0.0))) \
+                if isinstance(self.source, SyntheticSource) else False
+        except Exception:
+            _lim = False
+
+        # Sr.15: sensor fps vs control update_interval_hz — hold last gimbal
+        # command between control ticks so the configured rate is enforced.
+        fps_cfg = max(float(self.cfg["camera"].get("fps", 30.0)), 1)
+        upd_cfg = max(float(self.cfg["camera"].get("update_interval_hz", fps_cfg)), 1)
+        dt_ctrl = 1.0 / upd_cfg
+        if upd_cfg >= fps_cfg:
+            control_due = True
+        else:
+            every = max(1, int(round(fps_cfg / upd_cfg)))
+            control_due = (self._tick_id % every) == 0
+        if control_due or self._last_cmd is None:
+            try:
+                _sm0 = getattr(self.tracker, "sm", None)
+                _miss0 = int(getattr(_sm0, "missed", 0))
+                _cctx = {
+                    "missed": _miss0,
+                    "cand_frames": int(getattr(_sm0, "candidate_frames", 0)),
+                    "locked_frames": int(getattr(_sm0, "locked_frames", 0)),
+                    "det_valid": bool(detection.valid),
+                    "det_conf": float(detection.confidence or 0.0),
+                    "in_fov": _in_fov,
+                    "latched": bool(getattr(self, "_latched", False) and _miss0 <= 60),
+                    "scheduled_hold": bool(_hold),
+                    "saturated": False,
+                    "at_limit": bool(_lim),
+                }
+            except Exception:
+                _cctx = None
+            try:
+                cmd = self.controller.step(estimate, dt=dt_ctrl, ctx=_cctx)
+            except TypeError:
+                cmd = self.controller.step(estimate, dt=dt_ctrl)
+            self._last_cmd = cmd
+        else:
+            cmd = self._last_cmd
+        self._tick_id += 1
         is_ptz = getattr(self.source, "is_ptz_enabled", isinstance(self.source, SyntheticSource))
         if is_ptz:
-            self.source.apply_camera_command(cmd.pan_rate, cmd.tilt_rate, dt)
+            self.source.apply_camera_command(cmd.pan_rate, cmd.tilt_rate, dt_ctrl)
 
         proc_ms = (time.perf_counter() - t0) * 1000
         now = time.perf_counter()
@@ -342,7 +422,9 @@ class MainWindow(QMainWindow):
             proc_ms, self.fps_smooth,
             cmd.pan_rate if is_ptz else 0, cmd.tilt_rate if is_ptz else 0,
             detection_confidence=detection.confidence,
-            saturated=cmd.saturated if is_ptz else False, input_fps=input_fps)
+            saturated=cmd.saturated if is_ptz else False, input_fps=input_fps,
+            detection_centroid=detection.centroid_px if detection.valid else None,
+            search_case=getattr(cmd, "search_case", ""))
 
         centre_offset = None
         if isinstance(self.source, VideoSource):
@@ -440,6 +522,7 @@ class MainWindow(QMainWindow):
             self._tele_vals["last"].setText(
                 f"{_tele.last_detect_age_s:.2f} s" if _tele.last_detect_age_s is not None else "—")
             self._tele_vals["fov"].setText(_tele.fov if _tele.fov is not None else "—")
+            self._tele_vals["search"].setText(getattr(cmd, "search_case", "") or "—")
         except Exception:
             pass
         # push everything to the separate dashboard window (if open)
@@ -601,6 +684,7 @@ class MainWindow(QMainWindow):
             track_age_s=getattr(_tele, "track_age_s", None),
             last_detect_age_s=getattr(_tele, "last_detect_age_s", None),
             fov=getattr(_tele, "fov", None),
+            search_case=getattr(cmd, "search_case", None),
         )
 
     def _show_benchmark_dialog(self):

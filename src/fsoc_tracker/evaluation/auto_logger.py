@@ -122,7 +122,7 @@ class RobustPerfLogger:
             traceback.print_exc()
             return None
 
-    def log_frame(self, frame_id, timestamp, detection_valid, estimate, ground_truth, processing_ms, fps, pan_rate, tilt_rate, detection_confidence=0.0, saturated=False, input_fps=30.0):
+    def log_frame(self, frame_id, timestamp, detection_valid, estimate, ground_truth, processing_ms, fps, pan_rate, tilt_rate, detection_confidence=0.0, saturated=False, input_fps=30.0, detection_centroid=None, search_case=None):
         """Call every tick — updates metrics and appends CSV incrementally."""
         if self.metrics is None:
             return None
@@ -131,7 +131,8 @@ class RobustPerfLogger:
             entry = self.metrics.update(
                 frame_id, timestamp, detection_valid, estimate, ground_truth,
                 processing_ms, fps, pan_rate, tilt_rate,
-                detection_confidence=detection_confidence, saturated=saturated, input_fps=input_fps
+                detection_confidence=detection_confidence, saturated=saturated, input_fps=input_fps,
+                detection_centroid=detection_centroid, search_case=search_case
             )
             # incremental CSV
             if self.csv_file and self.csv_writer is None:
@@ -147,6 +148,7 @@ class RobustPerfLogger:
                 r["model_probs"] = str(r.get("model_probs", ""))
                 r["gt_pos"] = str(r.get("gt_pos", ""))
                 r["est_pos"] = str(r.get("est_pos", ""))
+                r["raw_pos"] = str(r.get("raw_pos", ""))
                 try:
                     self.csv_writer.writerow(r)
                     # flush every 10 frames or on key frames to limit I/O
@@ -248,6 +250,11 @@ class RobustPerfLogger:
             if self.metrics.frames:
                 events = [{"frame_id": f["frame_id"], "state": f["tracking_state"], "error_px": f["error_px"], "confidence": f.get("detection_confidence", 0)} for f in self.metrics.frames]
                 _atomic_write(os.path.join(self.run_dir, "events.json"), json.dumps(events, indent=2))
+            # centroiding_error.csv — dedicated per-frame centroiding log (Benchmark-1/2)
+            try:
+                self._write_centroiding_log(self.run_dir)
+            except Exception as e:
+                print(f"[AutoLogger] centroiding log failed: {e}")
 
             # summary_report.html (standalone, no external deps)
             html = self._build_html(meta, summary, cfg)
@@ -285,6 +292,34 @@ class RobustPerfLogger:
 
     def get_last_run_dir(self):
         return self.run_dir
+
+    def _write_centroiding_log(self, run_dir):
+        """Dedicated centroiding-error log: raw centroid vs GT + fused vs GT per frame."""
+        import csv as _csv
+        path = os.path.join(run_dir, "centroiding_error.csv")
+        tmp = path + ".tmp"
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            w = _csv.writer(f)
+            w.writerow(["frame_id", "timestamp", "gt_x", "gt_y",
+                        "raw_x", "raw_y", "fused_x", "fused_y",
+                        "centroid_error_px", "tracking_error_px",
+                        "detection_valid", "tracking_state", "confidence"])
+            for fr in (self.metrics.frames if self.metrics else []):
+                gt = fr.get("gt_pos")
+                raw = fr.get("raw_pos")
+                est = fr.get("est_pos")
+                w.writerow([
+                    fr.get("frame_id"), fr.get("timestamp"),
+                    gt[0] if gt else "", gt[1] if gt else "",
+                    raw[0] if raw else "", raw[1] if raw else "",
+                    est[0] if est else "", est[1] if est else "",
+                    fr.get("centroid_error_px") if fr.get("centroid_error_px") is not None else "",
+                    fr.get("error_px") if fr.get("error_px") is not None else "",
+                    int(bool(fr.get("detection_valid"))), fr.get("tracking_state", ""),
+                    fr.get("detection_confidence", 0),
+                ])
+        os.replace(tmp, path)
+        return path
 
     def _deep_copy_cfg(self, cfg):
         try:
@@ -359,7 +394,7 @@ class RobustPerfLogger:
     <div><div class="muted" style="margin-bottom:6px">Error vs Time</div><img src="error_plot.png" onerror="this.style.display='none'"><div class="muted">frame_metrics.csv -> error_px</div></div>
     <div><div class="muted" style="margin-bottom:6px">Trajectory (world)</div><img src="trajectory_plot.png" onerror="this.style.display='none'"><div class="muted">world_pos vs time</div></div>
   </div>
-  <div class="muted" style="margin-top:10px">Files: <span class="mono">config_used.yaml, frame_metrics.csv, events.json, summary_report.json, run_metadata.json</span></div>
+  <div class="muted" style="margin-top:10px">Files: <span class="mono">config_used.yaml, frame_metrics.csv, centroiding_error.csv, events.json, summary_report.json, run_metadata.json</span></div>
 </div>
 </div></body></html>"""
 
