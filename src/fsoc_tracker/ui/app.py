@@ -4,14 +4,14 @@ import datetime
 import numpy as np
 import cv2
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-                             QLabel, QPushButton, QFrame, QMessageBox, QFileDialog,
-                             QGridLayout)
+                             QLabel, QPushButton, QFrame, QMessageBox, QFileDialog)
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont
 from .viewport import CameraView, WorldView
 from ..pipeline.track.display import DisplayTracker
 from .control_deck import ControlDeck
 from .benchmark_dialog import BenchmarkResultDialog
+from .live_dashboard_window import LiveDashboardWindow
 from ..config.loader import load_config
 from ..input.synthetic_source import SyntheticSource
 from ..input.video_source import VideoSource
@@ -48,9 +48,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FSOC & PAT SIM")
-        self.resize(1240, 900)
+        self.resize(1500, 950)
+        self.setMinimumSize(1100, 700)
         self.setStyleSheet("QMainWindow { background: white; }")
         self.cfg = load_config()
+        self.dashboard_window = None
         self._build_ui()
         self._init_pipeline()
 
@@ -81,131 +83,76 @@ class MainWindow(QMainWindow):
         self.btn_pause = _pill_button("PAUSE", "#111111")
         self.btn_reset = _pill_button("RESET", "#DC2626")
         self.btn_config = _pill_button("CONFIG", "#1D4ED8")
-        for b in (self.btn_start, self.btn_pause, self.btn_reset, self.btn_config):
+        self.btn_dashboard = _pill_button("DASHBOARD", "#0EA5E9")
+        for b in (self.btn_start, self.btn_pause, self.btn_reset, self.btn_config,
+                  self.btn_dashboard):
             top_lay.addWidget(b)
         root.addWidget(top)
 
-        # Middle — two FOVs
+        # Middle — two FOVs take ALL free space (dashboard lives in its own window)
         mid = QWidget()
         mid.setStyleSheet("background: white;")
         mid_lay = QHBoxLayout(mid)
-        mid_lay.setContentsMargins(28, 6, 28, 6)
-        mid_lay.setSpacing(24)
+        mid_lay.setContentsMargins(12, 8, 12, 12)
+        mid_lay.setSpacing(12)
 
         left_col = QVBoxLayout()
         left_col.setSpacing(4)
+        left_col.setContentsMargins(0, 0, 0, 0)
         lbl_cam = QLabel("Camera FOV")
         lbl_cam.setStyleSheet("color: #777777; font-size: 17px; font-weight: 700; background: transparent;")
         left_col.addWidget(lbl_cam)
         self.cam_view = CameraView("Camera FOV")
+        self.cam_view.setSizePolicy(self.cam_view.sizePolicy().Expanding,
+                                    self.cam_view.sizePolicy().Expanding)
         left_col.addWidget(self.cam_view, 1)
 
         right_col = QVBoxLayout()
         right_col.setSpacing(4)
+        right_col.setContentsMargins(0, 0, 0, 0)
         lbl_world = QLabel("World FOV")
         lbl_world.setStyleSheet("color: #777777; font-size: 17px; font-weight: 700; background: transparent;")
         right_col.addWidget(lbl_world)
         self.world_view = WorldView(world_size=(self.cfg["world"]["width"], self.cfg["world"]["height"]))
+        self.world_view.setSizePolicy(self.world_view.sizePolicy().Expanding,
+                                      self.world_view.sizePolicy().Expanding)
         right_col.addWidget(self.world_view, 1)
 
         mid_lay.addLayout(left_col, 1)
         mid_lay.addLayout(right_col, 1)
         root.addWidget(mid, 1)
 
-        # Bottom metrics panel — dark
-        bottom = QFrame()
-        bottom.setStyleSheet(f"QFrame {{ background: {BAR}; border: none; }}")
-        root.addWidget(bottom)
-        bottom_outer = QVBoxLayout(bottom)
-        bottom_outer.setContentsMargins(0, 0, 0, 0)
-        bottom_outer.setSpacing(0)
-        grid_wrap = QWidget()
-        grid_wrap.setStyleSheet("background: transparent;")
-        bottom_outer.addWidget(grid_wrap)
-        grid = QGridLayout(grid_wrap)
-        grid.setContentsMargins(60, 28, 60, 14)
-        grid.setHorizontalSpacing(18)
-        grid.setVerticalSpacing(12)
-        grid.setColumnStretch(0, 0)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 0)
-        grid.setColumnStretch(3, 1)
-
+        # Hidden compat labels — the dashboard now lives in its own window,
+        # but headless tests / external callers still read _values/_tele_vals.
         self._values = {}
-
-        def add_row(r, c_label, label_text, key):
-            lab = QLabel(label_text)
-            lab.setStyleSheet("color: white; font-size: 15px; font-weight: 700; background: transparent;")
-            val = QLabel("—")
-            val.setAlignment(Qt.AlignCenter)
-            val.setMinimumWidth(190)
-            val.setFixedHeight(30)
-            val.setStyleSheet(f"""
-                QLabel {{
-                    background: {VALUE_PILL}; color: #111111;
-                    border-radius: 15px; font-size: 13px; font-weight: 600;
-                }}
-            """)
-            grid.addWidget(lab, r, c_label * 2)
-            grid.addWidget(val, r, c_label * 2 + 1)
-            self._values[key] = val
-
-        # top group
-        add_row(0, 0, "State", "state")
-        add_row(1, 0, "Valid Detections", "valid")
-        add_row(2, 0, "Average Confidence", "conf")
-        add_row(3, 0, "Raw Centroid (x, y)", "raw")
-        add_row(4, 0, "Fused Centroid (x, y)", "fused")
-        add_row(0, 1, "F P S", "fps")
-        add_row(1, 1, "Average Latency", "lat_avg")
-        add_row(2, 1, "Maximum Latency", "lat_max")
-        # spacer row
-        grid.setRowMinimumHeight(5, 18)
-        # bottom group
-        add_row(6, 0, "Avg Tracking Error", "trk_err")
-        add_row(7, 0, "Avg Angular Error", "ang_err")
-        add_row(8, 0, "Mean & Max Error", "mean_max")
-        add_row(9, 0, "RMSE & P95 Error", "rmse_p95")
-        add_row(6, 1, "Lock Retention", "lock")
-        add_row(7, 1, "Target Loss & Count", "loss")
-        add_row(8, 1, "Acquisition Time & Count", "acq")
-        add_row(9, 1, "Reacquisition Time & Count", "reacq")
-
-        # live track telemetry strip — only real measurements, same pill style
-        strip = QFrame()
-        strip.setStyleSheet("QFrame { background: transparent; border: none; border-top: 1px solid #6B7280; }")
-        strip_lay = QHBoxLayout(strip)
-        strip_lay.setContentsMargins(60, 10, 60, 22)
-        strip_lay.setSpacing(18)
         self._tele_vals = {}
-        for _tkey, _caption in (("track_id", "TRACK ID"), ("det_conf", "DET CONF"),
-                                ("age", "TRACK AGE"), ("last", "LAST DETECT"),
-                                ("fov", "FOV STATUS")):
-            _box = QVBoxLayout()
-            _box.setSpacing(4)
-            _cap = QLabel(_caption)
-            _cap.setStyleSheet("color: #CBD5E1; font-size: 10px; font-weight: 800; letter-spacing: 0.6px; background: transparent;")
-            _val = QLabel("—")
-            _val.setAlignment(Qt.AlignCenter)
-            _val.setMinimumWidth(150)
-            _val.setFixedHeight(30)
-            _val.setStyleSheet(f"QLabel {{ background: {VALUE_PILL}; color: #111111; border-radius: 15px; font-size: 13px; font-weight: 600; }}")
-            _box.addWidget(_cap)
-            _box.addWidget(_val)
-            _wrap = QWidget()
-            _wrap.setStyleSheet("background: transparent;")
-            _wrap.setLayout(_box)
-            strip_lay.addWidget(_wrap)
-            self._tele_vals[_tkey] = _val
-        strip_lay.addStretch()
-        bottom_outer.addWidget(strip)
+        for _k in ("state", "valid", "conf", "raw", "fused", "fps",
+                   "lat_avg", "lat_max", "trk_err", "ang_err",
+                   "mean_max", "rmse_p95", "lock", "loss", "acq", "reacq"):
+            _hidden = QLabel("—")
+            self._values[_k] = _hidden
+        for _k in ("track_id", "det_conf", "age", "last", "fov"):
+            _hidden = QLabel("—")
+            self._tele_vals[_k] = _hidden
 
         # signals
         self.btn_start.clicked.connect(self.start_run)
         self.btn_pause.clicked.connect(self.toggle_pause)
         self.btn_reset.clicked.connect(self.reset_run)
         self.btn_config.clicked.connect(self.open_control_deck)
+        self.btn_dashboard.clicked.connect(self.open_dashboard)
         self.btn_pause.setEnabled(False)
+
+    def open_dashboard(self):
+        """Show the live dashboard in its own window (non-modal)."""
+        try:
+            if self.dashboard_window is None:
+                self.dashboard_window = LiveDashboardWindow(self)
+            self.dashboard_window.show()
+            self.dashboard_window.raise_()
+            self.dashboard_window.activateWindow()
+        except Exception:
+            pass
 
     # ---------------- pipeline (unchanged logic) ----------------
     def _init_pipeline(self):
@@ -331,6 +278,11 @@ class MainWindow(QMainWindow):
                 v.setText("—")
         except Exception:
             pass
+        try:
+            if self.dashboard_window is not None:
+                self.dashboard_window.dashboard.reset()
+        except Exception:
+            pass
 
     def _set(self, key, text):
         if key in self._values:
@@ -445,7 +397,7 @@ class MainWindow(QMainWindow):
             # video mode: no PTZ camera, keep footprint idle — still update trail dot only
             pass
 
-        # ---- bottom panel (16 fields, exact design labels) ----
+        # ---- metrics: compat labels + push to separate dashboard window ----
         summ = self.metrics.summary()
         raw = detection.centroid_px if detection.valid else None
         fused = estimate.pos_px
@@ -473,7 +425,7 @@ class MainWindow(QMainWindow):
         self._set("acq", f"{acq:.2f}s ({summ.get('acquisition_count', 0)})" if acq is not None else f"— ({summ.get('acquisition_count', 0)})")
         reacq_m = summ.get("reacquisition_mean_s")
         self._set("reacq", f"{reacq_m:.2f}s ({summ.get('reacquisition_count', 0)})" if reacq_m is not None else f"— ({summ.get('reacquisition_count', 0)})")
-        # live track telemetry strip — real values only, "—" when unavailable
+        # live track telemetry — real values only, "—" when unavailable
         try:
             self._tele_vals["track_id"].setText(_tele.track_label)
             self._tele_vals["det_conf"].setText(
@@ -483,6 +435,12 @@ class MainWindow(QMainWindow):
             self._tele_vals["last"].setText(
                 f"{_tele.last_detect_age_s:.2f} s" if _tele.last_detect_age_s is not None else "—")
             self._tele_vals["fov"].setText(_tele.fov if _tele.fov is not None else "—")
+        except Exception:
+            pass
+        # push everything to the separate dashboard window (if open)
+        try:
+            self._push_to_dashboard(summ, detection, estimate, cmd,
+                                    _dstate, _tele, raw, fused, cur_ang, proc_ms)
         except Exception:
             pass
 
@@ -504,6 +462,142 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def _push_to_dashboard(self, summ, detection, estimate, cmd,
+                             _dstate, _tele, raw, fused, cur_ang, proc_ms):
+        """Forward the live frame state to the separate dashboard window."""
+        if self.dashboard_window is None:
+            return
+        try:
+            dash = self.dashboard_window.dashboard
+        except Exception:
+            return
+        cfg = self.cfg
+        cam = cfg.get("camera", {})
+        tgt = cfg.get("target", {})
+        env = cfg.get("environment", {})
+        noise = cfg.get("noise", {})
+        atmo_cfg = cfg.get("atmosphere", {})
+        plat = cfg.get("platform", {})
+        world = cfg.get("world", {})
+
+        # current-frame error vs ground truth (last logged entry)
+        err_px = None
+        try:
+            if self.metrics.frames:
+                err_px = self.metrics.frames[-1].get("error_px")
+        except Exception:
+            pass
+        err_ang = cur_ang
+
+        try:
+            model_probs = list(getattr(estimate, "model_probs", (0.33, 0.33, 0.34)))
+            if len(model_probs) != 3:
+                model_probs = [0.33, 0.33, 0.34]
+        except Exception:
+            model_probs = [0.33, 0.33, 0.34]
+        try:
+            innov = float(getattr(estimate, "innovation", 0.0) or 0.0)
+        except Exception:
+            innov = 0.0
+
+        try:
+            pan_angle = float(self.source.camera.pan) if hasattr(getattr(self.source, "camera", None), "pan") else None
+        except Exception:
+            pan_angle = None
+        try:
+            tilt_angle = float(self.source.camera.tilt) if hasattr(getattr(self.source, "camera", None), "tilt") else None
+        except Exception:
+            tilt_angle = None
+
+        res = cam.get("resolution", [640, 480])
+        fov = cam.get("fov_deg", [4.0, 3.0])
+        try:
+            conf_cur = float(getattr(detection, "confidence", 0.0) or 0.0) if getattr(detection, "valid", False) else 0.0
+        except Exception:
+            conf_cur = 0.0
+
+        noise_parts = []
+        try:
+            if noise.get("gaussian_enabled"):
+                noise_parts.append("gauss")
+            if noise.get("salt_pepper_enabled"):
+                noise_parts.append("s&p")
+            if noise.get("poisson"):
+                noise_parts.append("poisson")
+        except Exception:
+            pass
+        noise_str = "+".join(noise_parts) if noise_parts else "clean"
+
+        dash.update_metrics(
+            _dstate.label, conf_cur,
+            tuple(raw) if raw is not None else None,
+            tuple(fused) if fused is not None else None,
+            err_px, err_ang,
+            summ.get("mean_error_px", 0.0), summ.get("rmse_px", 0.0),
+            summ.get("max_error_px", 0.0), summ.get("p95_error_px", 0.0),
+            float(summ.get("input_fps", cam.get("fps", 30))),
+            float(self.fps_smooth), float(summ.get("e2e_fps", self.fps_smooth)),
+            int(summ.get("total_frames", 0)), int(summ.get("dropped_frames", 0)),
+            float(summ.get("duration_s", 0.0)),
+            float(proc_ms), float(summ.get("avg_processing_ms", 0.0)),
+            float(summ.get("max_processing_ms", 0.0)),
+            summ.get("acquisition_time_s"), summ.get("reacquisition_last_s"),
+            summ.get("reacquisition_mean_s"), summ.get("reacquisition_max_s"),
+            int(summ.get("reacquisition_count", 0)),
+            int(summ.get("acquisition_count", 0)), int(summ.get("loss_count", 0)),
+            float(summ.get("lock_retention_pct", 0.0)),
+            float(summ.get("target_loss_pct", 0.0)),
+            int(summ.get("valid_detections", 0)),
+            float(summ.get("valid_detection_pct", 0.0)),
+            float(summ.get("avg_confidence", 0.0)),
+            model_probs, innov,
+            float(getattr(cmd, "pan_rate", 0.0) or 0.0),
+            float(getattr(cmd, "tilt_rate", 0.0) or 0.0),
+            pan_angle, tilt_angle,
+            bool(getattr(cmd, "saturated", False)),
+            int(getattr(self.metrics, "saturation_count", 0)),
+            str(atmo_cfg.get("type", "clear")), noise_str,
+            float(cam.get("jitter_px", 0.0)), str(plat.get("type", "none")),
+            int(cfg.get("experiment", {}).get("seed", 0)),
+            (int(world.get("width", 2000)), int(world.get("height", 2000))),
+            str(tgt.get("trajectory", "circular")),
+            float(tgt.get("speed_px_per_frame", 0.0)),
+            int(tgt.get("size", 10)),
+            gradient_enabled=bool(env.get("gradient_enabled", False)),
+            gradient_type=str(env.get("gradient_type", "linear")),
+            stars_enabled=bool(env.get("stars_enabled", False)),
+            stars_density=float(env.get("stars_density", 0.0)),
+            stars_brightness=int(env.get("stars_brightness", 0)),
+            vignetting_enabled=bool(env.get("vignetting_enabled", False)),
+            vignetting_strength=float(env.get("vignetting_strength", 0.0)),
+            brightness_gain=float(env.get("brightness_gain", 1.0)),
+            brightness_offset=int(env.get("brightness_offset", 0)),
+            vid_centre_x=float(cam.get("video_centre_offset_x", 0.0)),
+            vid_centre_y=float(cam.get("video_centre_offset_y", 0.0)),
+            cam_type=str(cam.get("type", "monochrome")),
+            cam_res=f"{res[0]}×{res[1]}",
+            cam_fov=f"{fov[0]:.1f}×{fov[1]:.1f}",
+            cam_fps=int(cam.get("fps", 30)),
+            cam_init=str(cam.get("initial_position", "centre")),
+            tgt_type=str(tgt.get("type", "beacon_spot")),
+            tgt_count=int(tgt.get("count", 1)),
+            tgt_shape=str(tgt.get("shape", "square")),
+            tgt_init=str(tgt.get("initial_mode", "random")),
+            max_pan=float(cam.get("max_pan_speed", 5.0)),
+            max_tilt=float(cam.get("max_tilt_speed", 5.0)),
+            update_hz=int(cam.get("update_interval_hz", cam.get("fps", 30))),
+            atmo_strength=float(atmo_cfg.get("strength", 0.0)),
+            gauss_std=float(noise.get("gaussian_std", 0.0)),
+            spp_prob=float(noise.get("salt_pepper_prob", 0.0)),
+            poisson_enabled=bool(noise.get("poisson", False)),
+            platform_speed=float(plat.get("speed_px_per_frame", 0.0)),
+            track_label=getattr(_tele, "track_label", None),
+            det_conf=getattr(_tele, "det_conf", None),
+            track_age_s=getattr(_tele, "track_age_s", None),
+            last_detect_age_s=getattr(_tele, "last_detect_age_s", None),
+            fov=getattr(_tele, "fov", None),
+        )
+
     def _show_benchmark_dialog(self):
         try:
             summary = self.metrics.summary() if self.metrics.frames else {}
@@ -519,6 +613,11 @@ class MainWindow(QMainWindow):
         try:
             if hasattr(self, "metrics") and self.metrics.frames:
                 self.auto_logger.abort_run()
+        except Exception:
+            pass
+        try:
+            if self.dashboard_window is not None:
+                self.dashboard_window.hide()
         except Exception:
             pass
         event.accept()

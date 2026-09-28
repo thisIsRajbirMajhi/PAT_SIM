@@ -1,35 +1,28 @@
-from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame, QHBoxLayout
+from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout
 from PyQt5.QtCore import Qt
-from .dashboard import Dashboard
-from .theme import COLORS
+from .dashboard import Dashboard, BAR
 
 class LiveDashboardWindow(QMainWindow):
+    """Separate live-dashboard window — exact pill layout from the reference."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Live Dashboard — FSOC Virtual Camera Tracker")
-        self.resize(1320, 820)
-        self.setStyleSheet(f"QMainWindow {{ background: {COLORS['bg']}; }}")
-        # keep on top but not modal; allow independent
+        self.setWindowTitle("Live Dashboard")
+        self.resize(1500, 560)
+        self.setMinimumSize(1200, 480)
+        self.setStyleSheet(f"QMainWindow {{ background: {BAR}; }}")
+        # independent window, not modal
         self.setWindowFlags(Qt.Window)
 
         central = QWidget()
-        central.setStyleSheet(f"background: {COLORS['bg']};")
+        central.setStyleSheet(f"background: {BAR};")
         root = QVBoxLayout(central)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # headers/footers removed per request (58 fields title, Updates hint, Thresholds bar, statusBar)
-        # scrollable dashboard grid — takes all remaining space
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet(f"QScrollArea {{ background:{COLORS['bg']}; border:none; }}")
         self.dashboard = Dashboard()
-        scroll.setWidget(self.dashboard)
-        root.addWidget(scroll, 1)
+        root.addWidget(self.dashboard)
 
         self.setCentralWidget(central)
-        self.statusBar().hide()
 
     def closeEvent(self, event):
         # hide instead of destroy so MainWindow keeps reference and can reshow

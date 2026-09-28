@@ -24,7 +24,7 @@ class CameraView(QWidget):
         self._display = None      # DisplayState from pipeline.track.display
         self._telemetry = None    # TrackTelemetry for the primary track
         self.show_grid = False
-        self.setMinimumSize(400, 340)
+        self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("background: black; border: none;")
@@ -109,19 +109,28 @@ class CameraView(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        # pure black canvas when idle — overlays only after START
+        # base fill (only visible when idle — live frames cover it fully)
         p.fillRect(self.rect(), QColor(0, 0, 0))
         if self._rgb is None:
             return
-        # fit image into black rect (keep aspect)
+        # fill viewport completely (cover, center-cropped): no black bars.
+        # scale = max() so every widget pixel shows image content; QPainter
+        # clips the overflow beyond the widget edges automatically.
         avail = self.rect()
-        scale = min(avail.width() / self._w, avail.height() / self._h)
+        scale = max(avail.width() / self._w, avail.height() / self._h)
         disp_w = max(1, int(self._w * scale))
         disp_h = max(1, int(self._h * scale))
         ox = avail.x() + (avail.width() - disp_w) // 2
         oy = avail.y() + (avail.height() - disp_h) // 2
+        vis_left = avail.x()
+        vis_top = avail.y()
+        vis_right = avail.x() + avail.width()
+        vis_bottom = avail.y() + avail.height()
         qimg = QImage(self._rgb.data, self._w, self._h, self._w * 3, QImage.Format_RGB888)
-        pix = QPixmap.fromImage(qimg).scaled(disp_w, disp_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        # Render at native pixels when possible: smooth only when downscaling,
+        # fast (nearest) when upscaling so actual sensor resolution stays crisp.
+        _mode = Qt.SmoothTransformation if scale < 1.0 else Qt.FastTransformation
+        pix = QPixmap.fromImage(qimg).scaled(disp_w, disp_h, Qt.IgnoreAspectRatio, _mode)
         p.drawPixmap(ox, oy, pix)
 
         # ---- system status banner (top-left): global track state only ----
@@ -139,7 +148,7 @@ class CameraView(QWidget):
             _txt = f"\u25cf  {_label}"
             _tw = _fm.horizontalAdvance(_txt) + 18
             _th = 20
-            _r = QRect(ox + 8, oy + 8, int(_tw), _th)
+            _r = QRect(vis_left + 8, vis_top + 8, int(_tw), _th)
             p.setPen(QPen(QColor(_hex), 1))
             p.setBrush(QColor(0, 0, 0, 150))
             p.drawRoundedRect(_r, 8, 8)
@@ -153,7 +162,7 @@ class CameraView(QWidget):
                 _fm2 = p.fontMetrics()
                 _t2 = "NO TARGET"
                 _tw2 = _fm2.horizontalAdvance(_t2) + 16
-                _r2 = QRect(ox + 8, oy + 8 + _th + 6, int(_tw2), 16)
+                _r2 = QRect(vis_left + 8, vis_top + 8 + _th + 6, int(_tw2), 16)
                 p.setPen(QPen(QColor("#9CA3AF"), 1))
                 p.setBrush(QColor(0, 0, 0, 150))
                 p.drawRoundedRect(_r2, 6, 6)
@@ -234,17 +243,17 @@ class CameraView(QWidget):
                     x1, y1 = to_widget(bx + bw, by + bh)
                     p.setPen(QPen(box_col, 1))
                     p.drawRect(QRect(x0, y0, x1 - x0, y1 - y0))
-                    r1 = self._draw_tag(p, x0, y0, tag, tag_bg, clamp_top=oy,
-                                        clamp_right=ox + disp_w - 4)
+                    r1 = self._draw_tag(p, x0, y0, tag, tag_bg, clamp_top=vis_top,
+                                        clamp_right=vis_right - 4)
                     self._draw_tag(p, r1.x(), r1.y() + r1.height() + 18, sub,
-                                   QColor("#9CA3AF"), clamp_top=oy,
-                                   clamp_right=ox + disp_w - 4)
+                                   QColor("#9CA3AF"), clamp_top=vis_top,
+                                   clamp_right=vis_right - 4)
                 else:
-                    r1 = self._draw_tag(p, wx + 12, wy, tag, tag_bg, clamp_top=oy,
-                                        clamp_right=ox + disp_w - 4)
+                    r1 = self._draw_tag(p, wx + 12, wy, tag, tag_bg, clamp_top=vis_top,
+                                        clamp_right=vis_right - 4)
                     self._draw_tag(p, r1.x(), r1.y() + r1.height() + 18, sub,
-                                   QColor("#9CA3AF"), clamp_top=oy,
-                                   clamp_right=ox + disp_w - 4)
+                                   QColor("#9CA3AF"), clamp_top=vis_top,
+                                   clamp_right=vis_right - 4)
             except Exception:
                 pass
         elif (tele is not None and tele.predicted and tele.pred_fresh
@@ -254,8 +263,8 @@ class CameraView(QWidget):
             try:
                 ex, ey = est_pos_for_edge()
                 m = 14
-                ex_c = min(max(ex, ox + m), ox + disp_w - m)
-                ey_c = min(max(ey, oy + m), oy + disp_h - m)
+                ex_c = min(max(ex, vis_left + m), vis_right - m)
+                ey_c = min(max(ey, vis_top + m), vis_bottom - m)
                 import math
                 ang = math.atan2(ey - ey_c, ex - ex_c)
                 p.setPen(QPen(QColor(_hex), 1))
@@ -263,8 +272,8 @@ class CameraView(QWidget):
                 p.drawLine(ex_c, ey_c,
                            int(ex_c + 16 * math.cos(ang)), int(ey_c + 16 * math.sin(ang)))
                 self._draw_tag(p, ex_c + 12, ey_c, f"{_tid}  \u00b7  OFF-SCREEN",
-                               QColor(_hex), clamp_top=oy,
-                               clamp_right=ox + disp_w - 4)
+                               QColor(_hex), clamp_top=vis_top,
+                               clamp_right=vis_right - 4)
             except Exception:
                 pass
 
@@ -282,8 +291,8 @@ class CameraView(QWidget):
                 p.setPen(QPen(QColor(230, 60, 60), 1, Qt.DashLine))
                 p.drawRect(QRect(x0, y0, max(3, x1 - x0), max(3, y1 - y0)))
                 lbl = f"REJECTED {reason}".strip()
-                self._draw_tag(p, x0, y0, lbl, QColor(190, 40, 40), clamp_top=oy,
-                               clamp_right=ox + disp_w - 4)
+                self._draw_tag(p, x0, y0, lbl, QColor(190, 40, 40), clamp_top=vis_top,
+                               clamp_right=vis_right - 4)
             except Exception:
                 continue
 
@@ -317,15 +326,15 @@ class CameraView(QWidget):
                     p.drawEllipse(ex - 7, ey - 7, 14, 14)
                     if _coasting:
                         self._draw_tag(p, ex + 10, ey - 10, "PREDICTED",
-                                       QColor("#9CA3AF"), clamp_top=oy,
-                                       clamp_right=ox + disp_w - 4)
+                                       QColor("#9CA3AF"), clamp_top=vis_top,
+                                       clamp_right=vis_right - 4)
                 # velocity arrow (direction of motion, from filter velocity)
                 # drawn only while a live marker is shown (fix or fresh prediction)
                 try:
                     vx, vy = est.vel_angle  # deg/s
                     px_per_deg = (self._w / 4.0)
-                    dx = float(vx) * px_per_deg * 0.25
-                    dy = float(-vy) * px_per_deg * 0.25
+                    dx = float(vx) * px_per_deg * 0.25 * scale
+                    dy = float(-vy) * px_per_deg * 0.25 * scale
                     if (_det_now_valid or _coasting) and (abs(dx) > 3 or abs(dy) > 3):
                         p.setPen(QPen(QColor(255, 255, 255), 1))
                         p.drawLine(ex, ey, int(ex + dx), int(ey + dy))
@@ -356,24 +365,31 @@ class WorldView(QWidget):
         self.target_trails = {}  # idx -> [world (x, y)]
         self._thumb = None  # downscaled full-scene RGB for background
         self.cam_res = (640, 480)
-        self.setMinimumSize(400, 340)
+        self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("background: black; border: none;")
 
     def set_world_image(self, world_img, all_positions=None):
-        """Full-scene background (environment + ALL beacons) + per-target trails."""
+        """Full-scene background (environment + ALL beacons) + per-target trails.
+
+        Keeps native resolution (long edge up to 1200px) so the World FOV
+        renders the actual scene detail instead of a coarse thumbnail.
+        """
         try:
             import cv2
             import numpy as np
-            h, w = world_img.shape[:2]
-            long_edge = 480
-            s = min(1.0, long_edge / max(w, h))
-            if s < 1.0:
-                thumb = cv2.resize(world_img, (max(1, int(w * s)), max(1, int(h * s))),
-                                   interpolation=cv2.INTER_AREA)
+            if world_img is None:
+                self._thumb = None
             else:
-                thumb = world_img
+                h, w = world_img.shape[:2]
+                long_edge = 1200
+                s = min(1.0, long_edge / max(w, h))
+                if s < 1.0:
+                    thumb = cv2.resize(world_img, (max(1, int(w * s)), max(1, int(h * s))),
+                                       interpolation=cv2.INTER_AREA)
+                else:
+                    thumb = world_img
             if len(thumb.shape) == 2:
                 rgb = cv2.cvtColor(thumb, cv2.COLOR_GRAY2RGB)
             else:
@@ -433,12 +449,12 @@ class WorldView(QWidget):
         if self.camera_bounds is None:
             return
 
-        pad = 8
-        avail_w = self.width() - pad * 2
-        avail_h = self.height() - pad * 2
-        scale = min(avail_w / self.world_w, avail_h / self.world_h)
-        ox = pad + (avail_w - self.world_w * scale) / 2
-        oy = pad + (avail_h - self.world_h * scale) / 2
+        # fill viewport completely (cover, center-cropped): no black bars.
+        avail_w = self.width()
+        avail_h = self.height()
+        scale = max(avail_w / self.world_w, avail_h / self.world_h)
+        ox = (avail_w - self.world_w * scale) / 2
+        oy = (avail_h - self.world_h * scale) / 2
         world_rect = QRect(int(ox), int(oy),
                            max(1, int(self.world_w * scale)), max(1, int(self.world_h * scale)))
 
@@ -451,9 +467,7 @@ class WorldView(QWidget):
             except Exception:
                 pass
         else:
-            p.setPen(QPen(QColor(60, 60, 60), 1))
-            p.setBrush(QColor(10, 10, 10))
-            p.drawRect(world_rect)
+            p.fillRect(self.rect(), QColor(10, 10, 10))
 
         # trails for EVERY target (primary amber, others white)
         for idx in sorted(self.target_trails.keys()):
@@ -482,8 +496,9 @@ class WorldView(QWidget):
             p.setFont(QFont("Segoe UI", 7))
             p.setPen(QColor(255, 255, 255))
             rw, rh = self.cam_res
-            # keep label inside top edge like wireframe
-            p.drawText(int(fx), int(fy) - 16, int(fw), 14, Qt.AlignLeft, f"Camera FOV ({rw}, {rh})")
+            # keep label visible when the footprint is cropped at the top
+            _ly = max(0, int(fy) - 16)
+            p.drawText(int(fx), _ly, int(fw), 14, Qt.AlignLeft, f"Camera FOV ({rw}, {rh})")
         except Exception:
             pass
 
