@@ -96,3 +96,22 @@ def test_short_dip_does_not_count_miss():
     m = sm.missed
     sm.update(False, 0.0, innovation=25.0)
     assert sm.missed <= m + 1
+
+
+def test_tracker_step_forwards_innovation_hold():
+    # Production wiring: Tracker.step must forward post-update IMM NIS so a
+    # single weak outlier dip holds missed instead of counting a miss.
+    import numpy as np
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.track.tracker import Tracker
+    from fsoc_tracker.common.types import Detection, Frame
+    from fsoc_tracker.common.enums.tracking import TrackingState
+    tr = Tracker(load_config())
+    frame = Frame(image=np.zeros((480, 640), dtype=np.uint8), frame_id=0, timestamp=0.0)
+    for i in range(5):
+        tr.step(Detection(valid=True, centroid_px=(320.0, 240.0), confidence=0.9), frame)
+    assert tr.sm.state == TrackingState.LOCKED
+    m = tr.sm.missed
+    est = tr.step(Detection(valid=True, centroid_px=(0.0, 0.0), confidence=0.2), frame)
+    assert float(est.innovation) > 18.0
+    assert tr.sm.missed == m

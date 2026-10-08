@@ -69,7 +69,8 @@ class Tracker:
             # outage does not count as misses; keep last state.
             state = self.sm.state
         else:
-            state = self.sm.update(detection.valid, detection.confidence if detection.valid else 0.0)
+            state = self.sm.update(detection.valid, detection.confidence if detection.valid else 0.0,
+                                   innovation=float(self.imm.last_nis or 0.0))
 
         # build estimate
         # IMM fused pixel -> angle already via fused state
