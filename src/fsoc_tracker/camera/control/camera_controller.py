@@ -53,6 +53,9 @@ class CameraController:
         self.search_frames = 0
         self.raster_dir = 1.0
         self.raster_segment = 0
+        self.raster_tilt_dir = 1.0
+        self.raster_tilt_seg = 0
+        self._last_tile_limit = False
         self.last_case = SearchCase.TRACK
         self._build_scan_plan(cfg)
         self.max_slew = 25.0
@@ -107,6 +110,9 @@ class CameraController:
         self.search_frames = 0
         self.raster_dir = 1.0
         self.raster_segment = 0
+        self.raster_tilt_dir = 1.0
+        self.raster_tilt_seg = 0
+        self._last_tile_limit = False
         self.last_case = SearchCase.TRACK
         self.prev_pan_rate = 0.0; self.prev_tilt_rate = 0.0
 
@@ -197,18 +203,41 @@ class CameraController:
         return (math.cos(self.search_angle) * self.search_radius * scale,
                 math.sin(self.search_angle) * self.search_radius * scale)
 
-    def _raster_rates(self):
+    def _raster_rates(self, at_limit=False):
+        # Boustrophedon tile with wall-bounce: pan flips every sweep segment,
+        # tilt flips every two segments, and hitting a world edge (at_limit
+        # rising edge) reverses both axes so clamping cannot trap the sweep
+        # in one half of the world — every corner is visited over time.
         p = self.params
         sweep = max(20, getattr(self, "sweep_frames", 50))
         seg = (self.search_frames - getattr(self, "spiral_phase_frames", 90)) // sweep
         if seg != self.raster_segment:
             self.raster_segment = seg
             self.raster_dir *= -1.0
+            try:
+                if (seg // 2) != (getattr(self, "raster_tilt_seg", 0) // 2):
+                    self.raster_tilt_dir = float(getattr(self, "raster_tilt_dir", 1.0)) * -1.0
+                self.raster_tilt_seg = seg
+            except Exception:
+                pass
+        try:
+            _lim = bool(at_limit) and not bool(getattr(self, "_last_tile_limit", False))
+        except Exception:
+            _lim = False
+        try:
+            self._last_tile_limit = bool(at_limit)
+        except Exception:
+            pass
+        if _lim:
+            self.raster_dir *= -1.0
+            try:
+                self.raster_tilt_dir = float(getattr(self, "raster_tilt_dir", 1.0)) * -1.0
+            except Exception:
+                pass
         pan_scale = min(1.0, max(0.1, float(p.get("raster_pan_scale", 0.9))))
         tilt_scale = min(1.0, max(0.1, float(p.get("raster_tilt_scale", 0.35))))
         pan_rate = self.raster_dir * self.max_pan * pan_scale
-        tilt_sign = 1.0 if ((seg // 2) % 2 == 0) else -1.0
-        tilt_rate = tilt_sign * self.max_tilt * tilt_scale
+        tilt_rate = float(getattr(self, "raster_tilt_dir", 1.0)) * self.max_tilt * tilt_scale
         return pan_rate, tilt_rate
 
     def step(self, estimate: Estimate, dt=None, ctx=None) -> ControlCommand:
@@ -260,7 +289,7 @@ class CameraController:
                                       saturated=False, search_mode=True,
                                       search_case=case.value)
             if case == SearchCase.TILE:
-                pan_rate, tilt_rate = self._raster_rates()
+                pan_rate, tilt_rate = self._raster_rates(at_limit=bool(sctx.at_limit))
             else:  # EXPAND (default): legacy fixed spiral when cold,
                 # uncertainty-scaled only with an informed estimate
                 pan_rate, tilt_rate = self._spiral_rates(sctx.cov_trace, informed=bool(sctx.latched))
@@ -332,6 +361,8 @@ class CameraController:
             self.search_radius *= 0.9
         self.search_frames = 0
         self.raster_segment = 0
+        self.raster_tilt_seg = 0
+        self._last_tile_limit = False
 
         out_case = case.value if case in (SearchCase.STARE, SearchCase.HOLD_SCHEDULED) else SearchCase.TRACK.value
         return ControlCommand(pan_rate=float(pan), tilt_rate=float(tilt),

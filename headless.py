@@ -118,7 +118,7 @@ def has_intermittent_target(cfg):
     return False
 
 
-def verdict(summary, cold=False, post_lock_pct=None, stages=(), intermittent=False):
+def verdict(summary, cold=False, post_lock_pct=None, stages=(), intermittent=False, sm_states=()):
     """(ok, reasons).
 
     Standard (cued) runs: dashboard thresholds over the whole run
@@ -130,6 +130,8 @@ def verdict(summary, cold=False, post_lock_pct=None, stages=(), intermittent=Fal
     Intermittent (blink/hidden) runs: loss% is inapplicable since the beacon
     is physically absent part of the time — judge acquisition (locks
     repeatedly), RMSE while visible, and fast re-acquisition instead.
+    Intermittent takes priority over cold: a duty-cycled beacon can never
+    hold 90% post-lock no matter how good the tracker is.
     """
     reasons = []
     if summary.get("rmse_px", 0) > RMSE_PASS:
@@ -141,18 +143,17 @@ def verdict(summary, cold=False, post_lock_pct=None, stages=(), intermittent=Fal
     e2e_fps = summary.get("e2e_fps", 0) or 0
     if avg_fps < FPS_MIN and e2e_fps < FPS_MIN:
         reasons.append(f"fps {avg_fps:.1f}/{e2e_fps:.1f} < {FPS_MIN}")
-    if cold:
+    if intermittent:
+        # Duty-cycled beacons are absent part of the time, so loss% and
+        # post-lock hold are inapplicable — but the run must still prove
+        # repeated acquisition across cycles (not one lucky lock), must
+        # reach a real track (tracker LOCKED at least once; the display
+        # banner may never settle on TRACKING through blink churn), and
+        # keep a healthy visible share.
         names = {getattr(s, "value", s) if not isinstance(s, str) else s for s in stages}
-        if "TRACKING" not in names:
+        names |= {getattr(s, "value", s) if not isinstance(s, str) else s for s in sm_states}
+        if "TRACKING" not in names and "LOCKED" not in names:
             reasons.append("never reached TRACKING")
-        if post_lock_pct is None:
-            reasons.append("never acquired")
-        elif post_lock_pct < POST_LOCK_PASS_PCT:
-            reasons.append(f"post-lock {post_lock_pct:.1f}% < {POST_LOCK_PASS_PCT}%")
-    elif intermittent:
-        # Duty-cycled beacons are absent part of the time, so loss% is
-        # inapplicable — but the run must still prove repeated acquisition
-        # across cycles (not one lucky lock) with a healthy visible share.
         if int(summary.get("acquisition_count", 0)) < 2:
             reasons.append("never re-acquired (need >=2 locks across cycles)")
         try:
@@ -161,6 +162,14 @@ def verdict(summary, cold=False, post_lock_pct=None, stages=(), intermittent=Fal
             _vpct = 0.0
         if _vpct < 15.0:
             reasons.append(f"visible share {_vpct:.1f}% < 15%")
+    elif cold:
+        names = {getattr(s, "value", s) if not isinstance(s, str) else s for s in stages}
+        if "TRACKING" not in names:
+            reasons.append("never reached TRACKING")
+        if post_lock_pct is None:
+            reasons.append("never acquired")
+        elif post_lock_pct < POST_LOCK_PASS_PCT:
+            reasons.append(f"post-lock {post_lock_pct:.1f}% < {POST_LOCK_PASS_PCT}%")
     else:
         if summary.get("target_loss_pct", 0) >= LOSS_PASS_PCT:
             reasons.append(f"loss {summary['target_loss_pct']:.1f}% >= {LOSS_PASS_PCT}%")
@@ -518,7 +527,7 @@ def main(argv=None):
             cfg = load_config(args.config, overrides=parse_set(args.set) or None)
             cfg = deep_merge(cfg, copy.deepcopy(ov))
             frames = args.frames or fr
-            no_cue = (n == "X8-cold-start") if not args.cue else False
+            no_cue = True if not args.cue else False  # every stress preset starts far: uncued cold runs unless --cue forces assistance
             cold = no_cue
             print(f"\n===== {n}: {desc} =====")
             res = run_single(cfg, frames, seed=args.seed, every=0,
@@ -528,7 +537,8 @@ def main(argv=None):
             ok, reasons = verdict(res["summary"], cold=cold,
                                   post_lock_pct=res.get("post_lock_pct"),
                                   stages=res.get("stages", set()),
-                                  intermittent=has_intermittent_target(cfg))
+                                  intermittent=has_intermittent_target(cfg),
+                                  sm_states=res.get("sm_states", set()))
             print(f"VERDICT {n}: {'PASS' if ok else 'FAIL' + ' (' + '; '.join(reasons) + ')'}")
             results.append((n, ok, reasons, res["summary"], res.get("post_lock_pct")))
         print("\n===== EXTREME SUITE SUMMARY =====")
@@ -571,7 +581,8 @@ def main(argv=None):
     ok, reasons = verdict(res["summary"], cold=cold,
                           post_lock_pct=res.get("post_lock_pct"),
                           stages=res.get("stages", set()),
-                          intermittent=has_intermittent_target(base))
+                          intermittent=has_intermittent_target(base),
+                          sm_states=res.get("sm_states", set()))
     print(f"VERDICT: {'PASS' if ok else 'FAIL (' + '; '.join(reasons) + ')'}")
     return 1 if (args.strict and not ok) else 0
 

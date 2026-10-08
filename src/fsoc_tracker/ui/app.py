@@ -234,8 +234,13 @@ class MainWindow(QMainWindow):
             self._latched = False
             if hasattr(self.source, "reset"):
                 self.source.reset()
-            # coarse cue: target starts rendered in Camera FOV, loop centers it
-            if isinstance(self.source, SyntheticSource) and hasattr(self.source, "cue_camera_to_target"):
+            # coarse cue: target starts rendered in Camera FOV, loop centers it.
+            # Stress presets start far on purpose: no cue unless explicitly enabled.
+            try:
+                _cue = bool(self.cfg.get("experiment", {}).get("cue_to_target", True))
+            except Exception:
+                _cue = True
+            if _cue and isinstance(self.source, SyntheticSource) and hasattr(self.source, "cue_camera_to_target"):
                 self.source.cue_camera_to_target()
             self.display.reset()
             self.world_view.clear()

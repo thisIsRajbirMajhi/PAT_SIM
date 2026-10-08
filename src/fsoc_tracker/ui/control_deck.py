@@ -217,6 +217,7 @@ class ControlDeck(QDialog):
                         _fps = 30.0
                     new_cfg["experiment"]["duration_s"] = round(_fr / _fps, 2)
                 new_cfg["experiment"]["seed"] = _seed
+                new_cfg["experiment"]["cue_to_target"] = False  # stress presets start far: no assisted cue
                 self.cfg = new_cfg
                 self._refresh_all_fields()
                 QMessageBox.information(self, "Preset Loaded",
