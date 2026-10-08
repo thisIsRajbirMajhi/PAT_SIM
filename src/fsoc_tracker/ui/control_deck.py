@@ -38,10 +38,19 @@ class ControlDeck(QDialog):
     def _presets_tab(self):
         w = QWidget(); f = QFormLayout(w)
         # Discover presets from configs/*.yaml — P01..P12 from Preset Plan.md
+        # plus built-in stress presets X1..X10 (same set as headless --extreme).
         import os, glob, yaml
         preset_files = sorted(glob.glob(os.path.join("configs", "*.yaml")))
         self._preset_map = {}
         self._preset_meta_map = {}
+        self._stress_map = {}
+        try:
+            from ..config.stress_presets import SCENARIOS, STRESS_PREFIX, describe as _describe
+            for _name in SCENARIOS:
+                _pretty = f"{STRESS_PREFIX}{_name}"
+                self._stress_map[_pretty] = _name
+        except Exception:
+            pass
         display_names = []
         for pf in preset_files:
             base = os.path.splitext(os.path.basename(pf))[0]
@@ -65,6 +74,9 @@ class ControlDeck(QDialog):
         # Only file-based presets from configs/*.yaml are listed (no built-in fallbacks)
         if not display_names:
             display_names.append("(No presets found)")
+        # Append built-in stress presets after file presets (always available).
+        for _pretty in sorted(getattr(self, "_stress_map", {})):
+            display_names.append(_pretty)
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(display_names)
         # Default to first preset if available
@@ -109,6 +121,27 @@ class ControlDeck(QDialog):
 
     def _on_preset_selected(self, name):
         import os, yaml
+        # Built-in stress preset: show description + frame count.
+        try:
+            _stress = getattr(self, "_stress_map", {}).get(name, None)
+        except Exception:
+            _stress = None
+        if _stress:
+            try:
+                from ..config.stress_presets import describe as _describe
+                _info = _describe(_stress)
+            except Exception:
+                _info = ""
+            try:
+                self.preset_desc.setText(f"Built-in stress test {_stress} — {_info} Loads on 'Load Preset'.")
+            except Exception:
+                pass
+            try:
+                self.preset_expected.setText(f"Expected: {_info}")
+                self.preset_expected.show()
+            except Exception:
+                pass
+            return
         pf = self._preset_map.get(name, None)
         meta = getattr(self, "_preset_meta_map", {}).get(name, {})
         if pf and os.path.exists(pf):
@@ -142,6 +175,56 @@ class ControlDeck(QDialog):
     def _load_preset(self):
         name = self.preset_combo.currentText()
         import os, copy
+        # Built-in stress preset: apply overrides + duration, refresh all tabs.
+        try:
+            _stress = getattr(self, "_stress_map", {}).get(name, None)
+        except Exception:
+            _stress = None
+        if _stress:
+            try:
+                from ..config.loader import load_config as _load, deep_merge as _merge
+                from ..config.stress_presets import build_config as _build, describe as _describe
+            except Exception:
+                try:
+                    from ..config.loader import load_config as _load
+                    from ..config.stress_presets import SCENARIOS as _SC
+                    import copy as _copy
+                    _merge = None
+                    _build = None
+                except Exception as e:
+                    QMessageBox.warning(self, "Preset Load Failed", str(e))
+                    return
+            try:
+                base = _load()
+                # Preserve current seed; scenario sets duration from frames/fps.
+                try:
+                    _seed = int(self.seed_spin.value())
+                except Exception:
+                    _seed = int(base["experiment"].get("seed", 42))
+                if _build is not None and _merge is not None:
+                    new_cfg = _build(base, _stress, _merge)
+                else:
+                    _desc, _ov, _fr = _SC[_stress]
+                    new_cfg = copy.deepcopy(base)
+                    for _k, _v in _ov.items():
+                        if isinstance(_v, dict) and isinstance(new_cfg.get(_k), dict):
+                            new_cfg[_k] = {**new_cfg[_k], **_v}
+                        else:
+                            new_cfg[_k] = _copy.deepcopy(_v)
+                    try:
+                        _fps = max(float(new_cfg["camera"].get("fps", 30.0)), 1)
+                    except Exception:
+                        _fps = 30.0
+                    new_cfg["experiment"]["duration_s"] = round(_fr / _fps, 2)
+                new_cfg["experiment"]["seed"] = _seed
+                self.cfg = new_cfg
+                self._refresh_all_fields()
+                QMessageBox.information(self, "Preset Loaded",
+                    f"Loaded built-in {_stress}\n{_describe(_stress) if '_describe' in dir() else ''}\nAll 7 tabs updated. Click Apply to commit to simulator.")
+                return
+            except Exception as e:
+                QMessageBox.warning(self, "Preset Load Failed", str(e))
+                return
         pf = self._preset_map.get(name)
         try:
             if pf and os.path.exists(pf):
