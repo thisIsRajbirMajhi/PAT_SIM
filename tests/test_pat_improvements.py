@@ -73,3 +73,26 @@ def test_locked_deadzone_tighter_than_search():
     c = CameraController(load_config())
     assert c.effective_deadzone(TrackingState.LOCKED) == 0.5
     assert c.effective_deadzone(TrackingState.SEARCHING) == 2.0
+
+
+def test_early_gate_wide():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.track.tracker import Tracker
+    tr = Tracker(load_config())
+    g_early = tr.get_gate_radius_px(missed=2)
+    g_late = tr.get_gate_radius_px(missed=40)
+    assert g_early >= 80.0 and g_early <= 320.0
+    assert 40.0 <= g_late <= 320.0
+
+
+def test_short_dip_does_not_count_miss():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.state.state_machine import TrackingStateMachine
+    from fsoc_tracker.common.enums.tracking import TrackingState
+    sm = TrackingStateMachine(load_config())
+    for _ in range(5):
+        sm.update(True, 0.9)
+    assert sm.state == TrackingState.LOCKED
+    m = sm.missed
+    sm.update(False, 0.0, innovation=25.0)
+    assert sm.missed <= m + 1

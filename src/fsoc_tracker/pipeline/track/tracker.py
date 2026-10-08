@@ -106,7 +106,19 @@ class Tracker:
         Growth with `missed` frames is essential: right after a lock the
         covariance is small (overconfident) while the true error may already
         be large — a tight static gate would blind re-acquisition (X8).
+        Wide early gate: floor 80px while missed<=10 (short dropout), 40px
+        after (long outage / cold search relies on capped growth instead).
         """
+        # Wide-early floor (Task 4); callers may pass a larger min_px.
+        try:
+            _m = int(missed)
+        except Exception:
+            _m = 0
+        eff_min = 80.0 if _m <= 10 else 40.0
+        try:
+            eff_min = max(float(min_px), eff_min)
+        except Exception:
+            pass
         try:
             import math
             import numpy as np
@@ -125,7 +137,7 @@ class Tracker:
                 gate += 1.5 * vpx_f * max(0, int(missed))
             except Exception:
                 pass
-            return float(min(max_px, max(min_px, gate)))
+            return float(min(max_px, max(eff_min, gate)))
         except Exception:
             return float(max_px)
 

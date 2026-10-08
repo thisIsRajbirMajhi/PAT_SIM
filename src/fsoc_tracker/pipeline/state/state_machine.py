@@ -32,9 +32,19 @@ class TrackingStateMachine:
         except Exception:
             return False
 
-    def update(self, detection_valid: bool, confidence: float) -> TrackingState:
+    def update(self, detection_valid: bool, confidence: float, innovation: float = 0.0) -> TrackingState:
         strong = bool(detection_valid and confidence > 0.45)
         self.lock_window.append(1 if strong else 0)
+        # Short-dropout hold: a transient innovation spike right after lock
+        # (single dipped frame) must not count as a miss — hold missed and
+        # report TEMP_LOST so re-acquisition stays in the wide early gate.
+        try:
+            _innov = float(innovation)
+        except Exception:
+            _innov = 0.0
+        if (not strong) and _innov > 18.0 and self.missed <= 3 and self.state == TrackingState.LOCKED:
+            self.state = TrackingState.TEMP_LOST
+            return self.state
         if strong:
             self.missed = 0
             self.candidate_frames += 1
