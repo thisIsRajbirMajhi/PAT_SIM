@@ -25,6 +25,7 @@ class CameraView(QWidget):
         self._telemetry = None    # TrackTelemetry for the primary track
         self._target_size = 10    # beacon side length in image px (fallback box)
         self.show_grid = False
+        self.show_trails = False    
         self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -327,7 +328,7 @@ class CameraView(QWidget):
         # motion trail in state color (fades toward the past) + prediction marker.
         # While a live detection exists the target ring above is the marker,
         # so the estimate is only drawn separately when coasting on prediction.
-        if len(self._est_trail) > 1:
+        if self.show_trails and len(self._est_trail) > 1:
             prev = None
             n = len(self._est_trail)
             for i, pt in enumerate(self._est_trail):
@@ -401,6 +402,7 @@ class WorldView(QWidget):
         self._thumb = None  # downscaled full-scene RGB for background
         self.cam_res = (640, 480)
         self.state_hex = "#FFFFFF"  # live state color (set each tick via set_state_color)
+        self.show_trails = False
         self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -515,28 +517,31 @@ class WorldView(QWidget):
         else:
             p.fillRect(self.rect(), QColor(10, 10, 10))
 
-        # trails: primary in live state color, others dim white
+        # live state color
         try:
             state_col = QColor(self.state_hex)
         except Exception:
             state_col = QColor(255, 255, 255)
-        for idx in sorted(self.target_trails.keys()):
-            tr = self.target_trails[idx]
-            if len(tr) < 2:
-                continue
-            if idx == 0:
-                col = QColor(state_col)
-                col.setAlpha(180)
-                p.setPen(QPen(col, 2))
-            else:
-                p.setPen(QPen(QColor(255, 255, 255, 110), 1))
-            prev = None
-            for pt in tr:
-                x = ox + pt[0] * scale
-                y = oy + pt[1] * scale
-                if prev is not None:
-                    p.drawLine(int(prev[0]), int(prev[1]), int(x), int(y))
-                prev = (x, y)
+
+        # trails: primary in live state color, others dim white
+        if self.show_trails:
+            for idx in sorted(self.target_trails.keys()):
+                tr = self.target_trails[idx]
+                if len(tr) < 2:
+                    continue
+                if idx == 0:
+                    col = QColor(state_col)
+                    col.setAlpha(180)
+                    p.setPen(QPen(col, 2))
+                else:
+                    p.setPen(QPen(QColor(255, 255, 255, 110), 1))
+                prev = None
+                for pt in tr:
+                    x = ox + pt[0] * scale
+                    y = oy + pt[1] * scale
+                    if prev is not None:
+                        p.drawLine(int(prev[0]), int(prev[1]), int(x), int(y))
+                    prev = (x, y)
 
         # camera footprint in live state color
         try:
