@@ -115,3 +115,43 @@ def test_tracker_step_forwards_innovation_hold():
     est = tr.step(Detection(valid=True, centroid_px=(0.0, 0.0), confidence=0.2), frame)
     assert float(est.innovation) > 18.0
     assert tr.sm.missed == m
+
+
+def test_ekf_dt_uses_update_interval():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.estimation.ekf import SimpleEKF
+    from fsoc_tracker.pipeline.track.tracker import Tracker
+    cfg = load_config()
+    cfg["camera"]["fps"] = 30.0
+    cfg["camera"]["update_interval_hz"] = 60.0
+    assert abs(SimpleEKF(cfg).dt - 1.0 / 60.0) < 1e-9
+    assert abs(Tracker(cfg).dt - 1.0 / 60.0) < 1e-9
+
+
+def test_tracker_step_applies_ego_compensation():
+    import numpy as np
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.track.tracker import Tracker
+    from fsoc_tracker.common.types import Detection, Frame
+    cfg = load_config()
+    frame = Frame(image=np.zeros((480, 640), dtype=np.uint8), frame_id=0, timestamp=0.0)
+    t1 = Tracker(cfg)
+    t1.step(Detection(valid=True, centroid_px=(320.0, 240.0), confidence=0.9), frame)
+    x_noego = t1.imm.fused_x.copy()
+    t2 = Tracker(cfg)
+    t2.step(Detection(valid=True, centroid_px=(320.0, 240.0), confidence=0.9), frame)
+    t2.tracker_step = None
+    # second step with strong ego rate must shift angles back vs no-ego
+    t1.step(Detection(valid=False, confidence=0.0), frame, ego_rate=(0.0, 0.0))
+    t2.step(Detection(valid=False, confidence=0.0), frame, ego_rate=(4.0, 0.0))
+    assert t2.imm.fused_x[0] < t1.imm.fused_x[0]
+
+
+def test_pat_loop_accepts_ego_and_limit():
+    import numpy as np
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.orchestration.pat_loop import SearchTrackPipeline
+    pipe = SearchTrackPipeline(load_config())
+    img = np.zeros((480, 640), dtype=np.uint8)
+    d, e, c = pipe.step_frame(img, in_fov=False, at_limit=True, ego_rate=4.0)
+    assert d is not None and e is not None

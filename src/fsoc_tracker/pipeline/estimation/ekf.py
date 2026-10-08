@@ -22,7 +22,7 @@ class SimpleEKF:
         self.cx = self.res_w / 2
         self.cy = self.res_h / 2
         self.mode = mode
-        self.dt = 1.0 / max(float(cfg["camera"]["fps"]), 1)
+        self.dt = 1.0 / max(float(cfg["camera"].get("update_interval_hz", cfg["camera"].get("fps", 30.0))), 1)
         # state and covariance
         self.x = np.zeros(6, dtype=float)  # alpha,beta,adot,bdot,addot,bddot (degrees)
         self.P = np.eye(6) * 5.0
@@ -45,7 +45,7 @@ class SimpleEKF:
     def update_config(self, cfg):
         self.cfg = cfg
         try:
-            self.dt = 1.0 / max(float(cfg["camera"]["fps"]), 1)
+            self.dt = 1.0 / max(float(cfg["camera"].get("update_interval_hz", cfg["camera"].get("fps", 30.0))), 1)
         except Exception:
             pass
         try:

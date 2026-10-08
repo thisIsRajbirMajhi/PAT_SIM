@@ -293,7 +293,12 @@ def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
         except Exception:
             _hold_sched = False
         try:
-            estimate = tracker.step(detection, frame, hold=False)
+            _ego = (float(getattr(controller, "prev_pan_rate", 0.0)),
+                    float(getattr(controller, "prev_tilt_rate", 0.0)))
+        except Exception:
+            _ego = (0.0, 0.0)
+        try:
+            estimate = tracker.step(detection, frame, hold=False, ego_rate=_ego)
         except TypeError:
             estimate = tracker.step(detection, frame)
         try:
@@ -332,6 +337,7 @@ def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
                 "scheduled_hold": _hold_sched,
                 "saturated": False,
                 "at_limit": _lim_pre,
+                "ego_rate": max(abs(float(_ego[0])), abs(float(_ego[1]))),
             }
         except Exception:
             _cctx = None

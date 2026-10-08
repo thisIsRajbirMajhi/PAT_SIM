@@ -339,7 +339,13 @@ class MainWindow(QMainWindow):
         except Exception:
             _hold = False
         try:
-            estimate = self.tracker.step(detection, frame, hold=False)
+            _ego = (float(getattr(self.controller, "prev_pan_rate", 0.0)),
+                    float(getattr(self.controller, "prev_tilt_rate", 0.0))) \
+                if self.controller is not None else (0.0, 0.0)
+        except Exception:
+            _ego = (0.0, 0.0)
+        try:
+            estimate = self.tracker.step(detection, frame, hold=False, ego_rate=_ego)
         except TypeError:
             estimate = self.tracker.step(detection, frame)
         try:
@@ -391,6 +397,7 @@ class MainWindow(QMainWindow):
                     "scheduled_hold": bool(_hold),
                     "saturated": False,
                     "at_limit": bool(_lim),
+                    "ego_rate": max(abs(float(_ego[0])), abs(float(_ego[1]))),
                 }
             except Exception:
                 _cctx = None

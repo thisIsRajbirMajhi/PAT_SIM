@@ -67,11 +67,11 @@ class SearchTrackPipeline:
         every = max(1, int(round(fps / upd)))
         return (self._frame_id % every) == 0
 
-    def _controller_ctx(self, detection, in_fov=None) -> dict:
+    def _controller_ctx(self, detection, in_fov=None, at_limit=False, ego_rate=0.0) -> dict:
         tctx = self.tracker.get_context() if hasattr(self.tracker, "get_context") else {}
-        # Note: pat_loop sees only frame pixels (no gimbal handle), so
-        # at_limit stays False here; the GUI and headless runners, which own
-        # the camera, provide the real world-edge flag instead.
+        # Note: pat_loop sees only frame pixels (no gimbal handle by default),
+        # so at_limit defaults False; runners that own the camera (GUI,
+        # headless) pass the real world-edge flag instead.
         missed = int(tctx.get("missed", 0))
         return {
             "missed": missed,
@@ -86,10 +86,11 @@ class SearchTrackPipeline:
             "latched": bool(self._latched and missed <= 60),
             "scheduled_hold": scheduled,
             "saturated": False,
-            "at_limit": False,
+            "at_limit": bool(at_limit),
+            "ego_rate": float(ego_rate),
         }
 
-    def step_frame(self, frame_image, dt=None, in_fov=None):
+    def step_frame(self, frame_image, dt=None, in_fov=None, at_limit=False, ego_rate=0.0):
         """One PAT tick on a raw frame image. Returns (detection, estimate, command|None)."""
         # Sensor detection/tracking runs every frame; the gimbal command is
         # held between control ticks so update_interval_hz is enforced.
@@ -118,7 +119,13 @@ class SearchTrackPipeline:
         hold = False  # SM stays truthful (LOST->REACQUIRING); schedule only freezes the gimbal via ctx
         scheduled = _scheduled_hold(self._frame_id, self.cfg)
         try:
-            estimate = self.tracker.step(detection, frame_image, hold=hold)
+            _ego_t = (0.0, 0.0) if ego_rate in (None, 0.0, 0) else (
+                (float(ego_rate), 0.0) if isinstance(ego_rate, (int, float)) else
+                (float(ego_rate[0]), float(ego_rate[1])))
+        except Exception:
+            _ego_t = (0.0, 0.0)
+        try:
+            estimate = self.tracker.step(detection, frame_image, hold=hold, ego_rate=_ego_t)
         except TypeError:
             estimate = self.tracker.step(detection, frame_image)
         try:
@@ -129,7 +136,7 @@ class SearchTrackPipeline:
         command = None
         if self.controller is not None:
             if self._control_due():
-                cctx = self._controller_ctx(detection, in_fov=in_fov)
+                cctx = self._controller_ctx(detection, in_fov=in_fov, at_limit=at_limit, ego_rate=ego_rate)
                 try:
                     command = self.controller.step(estimate, dt=dt, ctx=cctx)
                 except TypeError:
@@ -138,7 +145,7 @@ class SearchTrackPipeline:
             else:
                 command = self._last_command
                 if command is None:
-                    cctx = self._controller_ctx(detection, in_fov=in_fov)
+                    cctx = self._controller_ctx(detection, in_fov=in_fov, at_limit=at_limit, ego_rate=ego_rate)
                     try:
                         command = self.controller.step(estimate, dt=dt, ctx=cctx)
                     except TypeError:
