@@ -110,6 +110,23 @@ class CameraController:
         self.last_case = SearchCase.TRACK
         self.prev_pan_rate = 0.0; self.prev_tilt_rate = 0.0
 
+    def effective_deadzone(self, state) -> float:
+        """Tight deadzone once locked (0.5 px), wide otherwise (2.0 px)."""
+        try:
+            if state == TrackingState.LOCKED:
+                return 0.5
+        except Exception:
+            pass
+        return 2.0
+
+    def effective_feedforward(self) -> float:
+        """Configured feedforward gain, defaulting to 0.7 when unset (0.0)."""
+        try:
+            ff = float(self.feedforward)
+        except Exception:
+            return 0.7
+        return ff if ff != 0.0 else 0.7
+
     def _build_ctx(self, estimate, ctx) -> SearchContext:
         ctx = dict(ctx or {})
         try:
@@ -198,6 +215,16 @@ class CameraController:
         if dt is None:
             dt = self.dt
         state = estimate.tracking_state
+        # Deadzone schedule: tight when locked, wide while acquiring.
+        try:
+            dz = float(self.effective_deadzone(state))
+        except Exception:
+            dz = 2.0
+        try:
+            self.pan_pid.deadzone = dz
+            self.tilt_pid.deadzone = dz
+        except Exception:
+            pass
         sctx = self._build_ctx(estimate, ctx)
         case = classify_search_case(sctx, self.params)
         self.last_case = case
@@ -255,8 +282,9 @@ class CameraController:
         else:
             err_pan, err_tilt = estimate.pos_angle
             vel_pan, vel_tilt = estimate.vel_angle
-            pan_unsat = self.pan_pid.step(err_pan, dt) + self.feedforward * vel_pan
-            tilt_unsat = self.tilt_pid.step(err_tilt, dt) + self.feedforward * vel_tilt
+            ff = self.effective_feedforward()
+            pan_unsat = self.pan_pid.step(err_pan, dt) + ff * vel_pan
+            tilt_unsat = self.tilt_pid.step(err_tilt, dt) + ff * vel_tilt
         if case == SearchCase.STARE:
             # Weak cue: freeze/slow to confirm instead of chasing noise.
             scale = float(self.params.get("stare_rate_scale", 0.3))

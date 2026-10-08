@@ -56,3 +56,20 @@ def test_early_reseed_after_10_misses():
     from fsoc_tracker.pipeline.track.tracker import Tracker
     tr = Tracker(load_config())
     assert tr.RESEED_MISSED <= 10 and tr.RESEED_CONF <= 0.6
+
+
+def test_imm_predict_accepts_ego_rate():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.estimation.imm import IMM
+    imm = IMM(load_config())
+    x1 = imm.predict(dt=1/30, ego_pan_rate=4.0, ego_tilt_rate=0.0)
+    assert x1.shape == (6,)
+
+
+def test_locked_deadzone_tighter_than_search():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.camera.control.camera_controller import CameraController
+    from fsoc_tracker.common.enums.tracking import TrackingState
+    c = CameraController(load_config())
+    assert c.effective_deadzone(TrackingState.LOCKED) == 0.5
+    assert c.effective_deadzone(TrackingState.SEARCHING) == 2.0

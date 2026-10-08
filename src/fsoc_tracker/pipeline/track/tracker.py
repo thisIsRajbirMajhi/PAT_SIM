@@ -35,9 +35,14 @@ class Tracker:
             except Exception:
                 pass
 
-    def step(self, detection: Detection, frame: Frame, hold: bool = False) -> Estimate:
-        # predict
-        self.imm.predict(self.dt)
+    def step(self, detection: Detection, frame: Frame, hold: bool = False, ego_rate=(0.0, 0.0)) -> Estimate:
+        # predict (ego-compensated: camera rotation shifts apparent angles)
+        try:
+            ego_pan = float(ego_rate[0]) if ego_rate is not None else 0.0
+            ego_tilt = float(ego_rate[1]) if ego_rate is not None else 0.0
+        except Exception:
+            ego_pan, ego_tilt = 0.0, 0.0
+        self.imm.predict(self.dt, ego_pan_rate=ego_pan, ego_tilt_rate=ego_tilt)
         # update with detection if valid
         if detection.valid and detection.centroid_px is not None:
             z = detection.centroid_px

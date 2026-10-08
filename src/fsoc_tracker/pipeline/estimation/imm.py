@@ -24,7 +24,7 @@ class IMM:
         self.fused_P = np.eye(6) * 5
         self.last_nis = 0.0
 
-    def predict(self, dt=None):
+    def predict(self, dt=None, ego_pan_rate=0.0, ego_tilt_rate=0.0):
         # mix step
         cbar = self.trans.T @ self.probs  # predicted prob?
         # Actually mixing: mu_{i|j} = trans[i,j]*prob[i]/cbar[j]
@@ -34,6 +34,33 @@ class IMM:
             m.predict(dt)
         # fused prediction as weighted sum
         self._fuse()
+        # Ego compensation: the camera rotated under the target, so shift the
+        # track-space angles back by ego_rate*dt (defaults zero = no-op).
+        try:
+            dt_f = float(dt) if dt is not None else float(getattr(self.models["CV"], "dt", 1.0 / 30.0))
+        except Exception:
+            dt_f = 1.0 / 30.0
+        try:
+            dpan = float(ego_pan_rate) * dt_f
+            dtilt = float(ego_tilt_rate) * dt_f
+        except Exception:
+            dpan, dtilt = 0.0, 0.0
+        if dpan != 0.0 or dtilt != 0.0:
+            for m in self.models.values():
+                try:
+                    m.x[0] -= dpan
+                    m.x[1] -= dtilt
+                    m.x[0] = float(np.clip(m.x[0], -12.0, 12.0))
+                    m.x[1] = float(np.clip(m.x[1], -12.0, 12.0))
+                except Exception:
+                    pass
+            try:
+                self.fused_x[0] -= dpan
+                self.fused_x[1] -= dtilt
+                self.fused_x[0] = float(np.clip(self.fused_x[0], -12.0, 12.0))
+                self.fused_x[1] = float(np.clip(self.fused_x[1], -12.0, 12.0))
+            except Exception:
+                pass
         return self.fused_x.copy()
 
     def update(self, z_px, confidence=0.9):
