@@ -15,7 +15,7 @@ class Tracker:
         self.cfg = cfg
         self.imm = IMM(cfg)
         self.sm = TrackingStateMachine(cfg)
-        self.dt = 1.0 / max(float(cfg["camera"]["fps"]), 1)
+        self.dt = 1.0 / max(float(cfg["camera"].get("update_interval_hz", cfg["camera"].get("fps", 30.0))), 1)
         self.last_estimate = Estimate()
 
     def reset(self):
@@ -25,7 +25,7 @@ class Tracker:
 
     def update_config(self, cfg):
         self.cfg = cfg
-        self.dt = 1.0 / max(float(cfg["camera"]["fps"]), 1)
+        self.dt = 1.0 / max(float(cfg["camera"].get("update_interval_hz", cfg["camera"].get("fps", 30.0))), 1)
         # propagate so EKF measurement noise / jitter / process noise refresh
         try:
             self.imm.update_config(cfg)
