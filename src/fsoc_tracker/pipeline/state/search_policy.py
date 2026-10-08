@@ -65,6 +65,31 @@ def get_search_params(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return out
 
 
+def overlap_search_steps(resolution, fov_deg, overlap: float = 0.3):
+    """Overlap-guaranteed spiral step sizes derived from the camera FOV.
+
+    step_h = fov_h * (1 - overlap); angle_step = clip(step_h / 4.5, 0.05, 1.5)
+    step_v = fov_v * (1 - overlap); radius_step = clip(step_v / 10.0, 0.01, 0.5)
+
+    `resolution` is accepted for call-site context (per interface) but the
+    derivation is FOV-driven. Ranges match controller validation.
+    """
+    try:
+        fov_h = float(fov_deg[0])
+        fov_v = float(fov_deg[1])
+    except Exception:
+        fov_h, fov_v = 4.0, 3.0
+    try:
+        ov = min(0.9, max(0.0, float(overlap)))
+    except Exception:
+        ov = 0.3
+    step_h = fov_h * (1.0 - ov)
+    step_v = fov_v * (1.0 - ov)
+    angle_step = min(1.5, max(0.05, step_h / 4.5))
+    radius_step = min(0.5, max(0.01, step_v / 10.0))
+    return (angle_step, radius_step)
+
+
 class SearchCase(str, Enum):
     TRACK = "TRACK"
     COAST = "COAST"
@@ -229,6 +254,7 @@ __all__ = [
     "SearchContext",
     "classify_search_case",
     "get_search_params",
+    "overlap_search_steps",
     "describe_case",
     "is_search_state",
     "is_track_state",

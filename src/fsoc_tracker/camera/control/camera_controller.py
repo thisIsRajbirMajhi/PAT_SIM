@@ -9,6 +9,9 @@ from ...pipeline.state.search_policy import (
     SearchContext,
     classify_search_case,
     get_search_params,
+    overlap_search_steps,
+    SEARCH_ANGLE_STEP,
+    SEARCH_RADIUS_STEP,
 )
 
 
@@ -70,6 +73,20 @@ class CameraController:
         except Exception:
             self.spiral_phase_frames = 90
             self.sweep_frames = 50
+        # Overlap-guaranteed spiral steps from the current FOV. An explicit
+        # cfg["controller"] override differing from the canonical default
+        # wins (backward compat); otherwise the FOV-derived value applies.
+        try:
+            res = tuple(cfg["camera"]["resolution"])
+            fov = tuple(cfg["camera"]["fov_deg"])
+            angle_step, radius_step = overlap_search_steps(res, fov)
+            c = cfg.get("controller", {}) or {}
+            if c.get("search_angle_step", None) in (None, SEARCH_ANGLE_STEP):
+                self.params["search_angle_step"] = angle_step
+            if c.get("search_radius_step", None) in (None, SEARCH_RADIUS_STEP):
+                self.params["search_radius_step"] = radius_step
+        except Exception:
+            pass
 
     def update_config(self, cfg):
         self.cfg = cfg
@@ -170,9 +187,11 @@ class CameraController:
         if seg != self.raster_segment:
             self.raster_segment = seg
             self.raster_dir *= -1.0
-        pan_rate = self.raster_dir * self.max_pan * float(p.get("raster_pan_scale", 0.9))
+        pan_scale = min(1.0, max(0.1, float(p.get("raster_pan_scale", 0.9))))
+        tilt_scale = min(1.0, max(0.1, float(p.get("raster_tilt_scale", 0.35))))
+        pan_rate = self.raster_dir * self.max_pan * pan_scale
         tilt_sign = 1.0 if ((seg // 2) % 2 == 0) else -1.0
-        tilt_rate = tilt_sign * self.max_tilt * float(p.get("raster_tilt_scale", 0.35))
+        tilt_rate = tilt_sign * self.max_tilt * tilt_scale
         return pan_rate, tilt_rate
 
     def step(self, estimate: Estimate, dt=None, ctx=None) -> ControlCommand:
