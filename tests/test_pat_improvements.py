@@ -29,3 +29,30 @@ def test_tile_reverses_before_limit():
     # (2*sweep+1)//sweep == 2 for any sweep >= 1, i.e. two flips); the
     # production toggle is kept correct instead of hacked to fit.
     assert c.raster_dir == d0
+
+
+def test_fast_lock_three_strong_frames():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.state.state_machine import TrackingStateMachine
+    from fsoc_tracker.common.enums.tracking import TrackingState
+    sm = TrackingStateMachine(load_config())
+    for _ in range(3):
+        sm.update(True, 0.85)
+    assert sm.state in (TrackingState.ACQUIRING, TrackingState.LOCKED)
+
+
+def test_single_weak_frame_does_not_wipe_progress():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.state.state_machine import TrackingStateMachine
+    sm = TrackingStateMachine(load_config())
+    sm.update(True, 0.9); sm.update(True, 0.9)
+    c = sm.candidate_frames
+    sm.update(True, 0.2)
+    assert sm.candidate_frames >= c
+
+
+def test_early_reseed_after_10_misses():
+    from fsoc_tracker.config.loader import load_config
+    from fsoc_tracker.pipeline.track.tracker import Tracker
+    tr = Tracker(load_config())
+    assert tr.RESEED_MISSED <= 10 and tr.RESEED_CONF <= 0.6

@@ -14,6 +14,10 @@ class TrackingStateMachine:
         self.reacq_frames = int(cfg["tracker"].get("reacq_timeout_frames", 30))
         self.required_lock_frames = 5  # need N consecutive to declare LOCKED
         self.required_candidate = 3
+        # Fast-lock hysteresis: high-confidence frames need fewer candidates
+        # to enter ACQUIRING (2 vs 3); full LOCKED still needs
+        # required_lock_frames consecutive or the dense-window path.
+        self.STRONG_FAST = 0.7
         # Blink-tolerant lock: 50%-duty blinking beacons can never produce 5
         # consecutive strong frames, so also accept a dense recent window.
         # Window counts strong frames; hidden-schedule outages drain it, so a
@@ -36,7 +40,9 @@ class TrackingStateMachine:
             self.candidate_frames += 1
             self.locked_frames += 1
             if self.state in (TrackingState.SEARCHING, TrackingState.CANDIDATE, TrackingState.TEMP_LOST, TrackingState.REACQUIRING):
-                if self.candidate_frames >= self.required_candidate:
+                fast = confidence > self.STRONG_FAST
+                need = 2 if fast else self.required_candidate
+                if self.candidate_frames >= need:
                     # go to acquiring then locked
                     if self.locked_frames >= self.required_lock_frames or self._window_locked():
                         self.state = TrackingState.LOCKED
@@ -54,7 +60,10 @@ class TrackingStateMachine:
                     self.state = TrackingState.LOCKED
         else:
             self.missed += 1
-            self.candidate_frames = max(0, self.candidate_frames - 1)
+            # Hysteresis: a weak-but-valid frame holds candidate progress
+            # (no decrement); only a fully invalid frame decrements.
+            if not detection_valid:
+                self.candidate_frames = max(0, self.candidate_frames - 1)
             self.locked_frames = max(0, self.locked_frames - 1)
             if self.missed <= 3:
                 # keep previous but if was locked go temp lost

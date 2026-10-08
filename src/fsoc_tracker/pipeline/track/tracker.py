@@ -8,6 +8,9 @@ from ..state import TrackingStateMachine
 
 
 class Tracker:
+    RESEED_MISSED = 10
+    RESEED_CONF = 0.6
+
     def __init__(self, cfg):
         self.cfg = cfg
         self.imm = IMM(cfg)
@@ -47,7 +50,7 @@ class Tracker:
             # process noise, so re-seed at the measurement instead of
             # updating a fiction (prevents overconfident wrong velocity that
             # all later frames then gate-reject — cf. X8 sweep-past lock).
-            if _missed > 30 and conf > 0.45 and hasattr(self.imm, "reseed"):
+            if _missed >= self.RESEED_MISSED and conf >= self.RESEED_CONF and hasattr(self.imm, "reseed"):
                 try:
                     self.imm.reseed(z)
                 except Exception:
