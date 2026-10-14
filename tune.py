@@ -4,6 +4,12 @@ No Optuna/headless imports at module import time — both are imported
 lazily inside functions so unit tests stay fast.
 """
 
+import argparse
+import copy
+import json
+import os
+import time
+
 # SEARCH_SPACE: key -> spec. Each spec has section (config subtree), kind,
 # range info, and stage tag (1/2/3) per docs/Tuning.md section 4:
 #   Stage 1 (core):    detector + tracker noises + PID + deadzone
@@ -276,3 +282,185 @@ def _optimize(optuna, storage, study_name, sampler, pruner, objective, trials):
     )
     study.optimize(objective, n_trials=trials)
     return study
+
+
+# Stage schedule across auto-loop rounds (Tuning.md section 4):
+# round 0 core -> round 1 policy -> round 2+ joint polish (stage=None).
+STAGE_SCHEDULE = (1, 2, None)
+
+
+def _stamp():
+    return time.strftime("%Y%m%d_%H%M%S")
+
+
+def _write_json(path, payload):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, path)
+    return path
+
+
+def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
+                  frames_override: int | None = None) -> dict:
+    """Validate a winner JSON against the full 80-case suite.
+
+    Exercises the real Task 1 path: `set_winner_overrides(winner_path)`
+    then the full suite through `build_suite` + `headless._worker`
+    (X/E via `run_tracking_case`, R via `run_robustness`). Sequential
+    in-process when `workers == 1`, otherwise a process pool (processes,
+    never threads). Per-case timeout passes into X/E cases.
+
+    `frames_override` is a TEST-ONLY accelerator (small frame counts);
+    default None = real frames. Never wired into the CLI path.
+
+    Returns at minimum `{fails, errors, verdict ("PASS"/"FAIL"),
+    report_paths}` and writes `runs/tune_<stamp>_validation.json`.
+    PASS iff 0 FAIL + 0 ERROR; any other non-passing verdict (including
+    non-PASS R results) counts as a fail.
+    """
+    import concurrent.futures
+
+    import headless
+
+    workers = int(workers)
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+
+    saved = copy.deepcopy(headless.WINNER_OVERRIDES)
+    try:
+        headless.set_winner_overrides(winner_path)
+        specs = headless.build_suite(frames_override=frames_override)
+        for s in specs:
+            s["timeout_s"] = timeout_s if s["kind"] in ("X", "E") else None
+            if headless.WINNER_OVERRIDES:
+                s["winner"] = copy.deepcopy(headless.WINNER_OVERRIDES)
+        if workers > 1:
+            with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=workers) as ex:
+                results = list(ex.map(headless._worker, specs))
+        else:
+            results = [headless._worker(s) for s in specs]
+    finally:
+        headless.WINNER_OVERRIDES = saved
+
+    fails = 0
+    errors = 0
+    for r in results:
+        v = r.get("verdict")
+        if v == "ERROR":
+            errors += 1
+        elif v == "FAIL":
+            fails += 1
+        elif v not in ("STRICT-PASS", "INTERMITTENT-PASS"):
+            fails += 1
+    verdict = "PASS" if (fails == 0 and errors == 0) else "FAIL"
+
+    stamp = _stamp()
+    report = os.path.join("runs", f"tune_{stamp}_validation.json")
+    payload = {
+        "winner": winner_path,
+        "fails": fails,
+        "errors": errors,
+        "verdict": verdict,
+        "stamp": stamp,
+        "results": results,
+    }
+    _write_json(report, payload)
+    return {"fails": fails, "errors": errors, "verdict": verdict,
+            "report_paths": [report]}
+
+
+def _nest_params(params):
+    """Nest flat trial params into {section: {key: value}} overrides."""
+    nested = {}
+    for key, value in params.items():
+        section = SEARCH_SPACE.get(key, {}).get("section", "controller")
+        nested.setdefault(section, {})[key] = value
+    return nested
+
+
+def write_best_artifact(overrides, value, trial_number, round_idx, stage,
+                        stamp=None):
+    """Write `runs/tune_<stamp>_best.json` (overrides + resolved config
+    + score breakdown). Returns the artifact path."""
+    stamp = stamp or _stamp()
+    try:
+        from pat_common.config.loader import deep_merge
+        from pat_common.config.defaults import DEFAULT_CONFIG
+        resolved = deep_merge(copy.deepcopy(DEFAULT_CONFIG),
+                              copy.deepcopy(overrides))
+    except Exception:
+        resolved = copy.deepcopy(overrides)
+    path = os.path.join("runs", f"tune_{stamp}_best.json")
+    _write_json(path, {
+        "overrides": overrides,
+        "resolved_config": resolved,
+        "score": {"value": value, "trial": trial_number,
+                  "round": round_idx, "stage": stage},
+        "stamp": stamp,
+    })
+    return path
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Optuna tuning harness")
+    ap.add_argument("--trials", type=int, default=20)
+    ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--study", default="tune")
+    ap.add_argument("--storage", default="sqlite:///runs/tune.db")
+    ap.add_argument("--subset", default="fast")
+    ap.add_argument("--validate-topk", type=int, default=1)
+    ap.add_argument("--max-rounds", type=int, default=3,
+                    help="study->validate rounds; 0 = unbounded")
+    ap.add_argument("--timeout", type=float, default=300.0,
+                    help="per-case timeout in seconds")
+    args = ap.parse_args(argv)
+
+    if args.subset != "fast":
+        ap.error("--subset only supports 'fast'")
+    if args.validate_topk < 1:
+        ap.error("--validate-topk must be >= 1")
+
+    round_idx = 0
+    while True:
+        if args.max_rounds and round_idx >= args.max_rounds:
+            print(f"STOP: {args.max_rounds} round(s) exhausted without green.")
+            return 1
+        stage = (STAGE_SCHEDULE[round_idx]
+                 if round_idx < len(STAGE_SCHEDULE) else None)
+        print(f"=== round {round_idx} stage={stage} "
+              f"trials={args.trials} ===")
+        study = run_study(trials=args.trials, workers=args.workers,
+                          study_name=args.study, storage=args.storage,
+                          timeout_s=args.timeout, stage=stage)
+        scored = [t for t in study.trials if t.value is not None]
+        scored.sort(key=lambda t: t.value)
+        top = scored[:args.validate_topk]
+        if not top:
+            print("STOP: study produced no completed trials.")
+            return 1
+        for rank, trial in enumerate(top):
+            overrides = _nest_params(trial.params)
+            stamp = _stamp()
+            winner_path = os.path.join(
+                "runs", f"tune_{stamp}_round{round_idx}_top{rank}.json")
+            _write_json(winner_path, overrides)
+            rep = validate_full(winner_path, workers=args.workers,
+                                timeout_s=args.timeout)
+            best_path = write_best_artifact(
+                overrides, trial.value, trial.number,
+                round_idx, stage, stamp=stamp)
+            print(f"round {round_idx} top{rank}: trial={trial.number} "
+                  f"value={trial.value:.1f} fails={rep['fails']} "
+                  f"errors={rep['errors']} verdict={rep['verdict']} "
+                  f"-> {best_path} {rep['report_paths']}")
+            if rep["fails"] == 0 and rep["errors"] == 0:
+                print("FINAL VERDICT: PASS - winner validated on full suite")
+                return 0
+        round_idx += 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

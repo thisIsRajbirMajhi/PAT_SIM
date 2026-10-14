@@ -11,4 +11,4 @@ pre-commit>=3.0
 matplotlib>=3.5  # for report plots (already required)
 pyyaml>=6.0
 optuna>=4.0  # parameter auto-tuning (tune.py)
-optuna-dashboard>=0.15  # web UI for studies (optuna-dashboard sqlite:///outputs/tune.db)
+optuna-dashboard>=0.15  # web UI for studies (optuna-dashboard sqlite:///runs/tune.db)
