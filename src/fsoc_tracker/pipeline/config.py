@@ -1,21 +1,13 @@
-"""Canonical defaults for the Pipeline module.
+"""Legacy compatibility: canonical defaults live in pat_pipeline.config.
 
-Single source of truth remains config/defaults.py:DEFAULT_CONFIG;
-re-exported here for discoverability and standalone use.
+Single source of truth remains fsoc_tracker.config.defaults:DEFAULT_CONFIG.
 """
-from ..config.defaults import DEFAULT_CONFIG
-
-DETECTOR_DEFAULTS = DEFAULT_CONFIG["detector"]
-TRACKER_DEFAULTS = DEFAULT_CONFIG["tracker"]
-CONTROLLER_DEFAULTS = DEFAULT_CONFIG["controller"]
-
-
-def get_detector(cfg):
-    return cfg.get("detector", {})
-
-
-def get_tracker(cfg):
-    return cfg.get("tracker", {})
-
+from pat_pipeline.config import (
+    CONTROLLER_DEFAULTS,
+    DETECTOR_DEFAULTS,
+    TRACKER_DEFAULTS,
+    get_detector,
+    get_tracker,
+)
 
 __all__ = ["DETECTOR_DEFAULTS", "TRACKER_DEFAULTS", "CONTROLLER_DEFAULTS", "get_detector", "get_tracker"]

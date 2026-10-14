@@ -1,20 +1,21 @@
-"""Camera module — virtual-camera optics + gimbal controller in one place.
+"""Legacy compatibility: canonical implementation lives in pat_pipeline.camera.
 
-Layout:
-    camera/
-        optics/     VirtualCamera + pure pixel<->angle geometry
-        control/    PIDController + CameraController (track PID + spiral search)
-        config.py   defaults + cfg accessors (mirrors config/defaults.py)
-        factory.py  make_camera(cfg) / make_controller(cfg)
+All names below resolve to the same objects as their `pat_pipeline.camera`
+counterparts (verified by class-identity tests).
 """
-from .config import CAMERA_DEFAULTS, CONTROLLER_DEFAULTS, get_camera, get_controller
-from .control import CameraController, PIDController
-from .factory import make_camera, make_controller
-from .optics import (
+from pat_pipeline.camera import (
+    CAMERA_DEFAULTS,
+    CONTROLLER_DEFAULTS,
+    CameraController,
+    PIDController,
     VirtualCamera,
     angle_to_pixel,
     deg_per_px,
     focal_px_rad,
+    get_camera,
+    get_controller,
+    make_camera,
+    make_controller,
     pixel_to_angle,
     px_per_deg,
     viewport_bounds,
