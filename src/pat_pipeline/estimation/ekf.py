@@ -178,10 +178,10 @@ class SimpleEKF:
             invS = np.linalg.pinv(S)
         nis = float(y @ invS @ y)
         self._last_nis = nis
-        # outlier gate: if huge, reject
-        gate = float(self.cfg_gate_sigma() ** 2 * 2) if hasattr(self, 'cfg_gate_sigma') else 36.0
-        # we store gate externally; for now threshold 25 (5 sigma)
-        if nis > 28:
+        # outlier gate: normalized innovation beyond gate_sigma^2*2
+        # (50.0 at the default sigma 5.0) rejects the measurement.
+        gate = float(self.cfg_gate_sigma() ** 2 * 2)
+        if nis > gate:
             # reject measurement, increase covariance slightly
             self.P += np.eye(6) * 0.8
             self._clamp_state()
@@ -196,7 +196,10 @@ class SimpleEKF:
         return self.x.copy(), nis
 
     def cfg_gate_sigma(self):
-        return 5.0
+        try:
+            return float(self.cfg.get("tracker", {}).get("gate_sigma", 5.0))
+        except Exception:
+            return 5.0
 
     def get_pixel_estimate(self):
         return self._h(self.x)
