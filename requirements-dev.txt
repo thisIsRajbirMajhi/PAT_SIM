@@ -10,3 +10,4 @@ mypy>=1.0
 pre-commit>=3.0
 matplotlib>=3.5  # for report plots (already required)
 pyyaml>=6.0
+optuna>=4.0  # parameter auto-tuning (tune.py)

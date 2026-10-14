@@ -5,6 +5,7 @@ __pycache__/
 venv/
 outputs/runs/*
 !outputs/runs/.gitkeep
+outputs/*.db
 data/input_videos/*.mp4
 !data/input_videos/.gitkeep
 dist/
