@@ -38,6 +38,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: PAT_SIM_pipeline_extracted
-          path: \${{ runner.temp }}/dist/PAT_SIM_pipeline_extracted.zip
+          path: ${{ runner.temp }}/dist/PAT_SIM_pipeline_extracted.zip
           if-no-files-found: error
           retention-days: 14
