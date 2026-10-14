@@ -170,7 +170,9 @@
 - [ ] Legacy imports verified identical
 - [ ] No GUI dep in pipeline
 
-## Task 9: Packaging extras + README
+## Task 9: Packaging extras + README [DONE]
+- Core deps in `pyproject.toml` (numpy/opencv/yaml/pillow); `gui` extra (PyQt5/pyqtgraph). Qt confined to `main.py`+`ui/*`; headless verified with Qt import-blocked.
+- `src/pat_pipeline/README.md` written per S11.
 **Description:** Split GUI deps to optional extra, document install commands, write `src/pat_pipeline/README.md`.
 **Acceptance criteria:**
 - [ ] `pyproject.toml` core install does not require Qt; `pip install -e .[gui]` restores GUI workflow
@@ -186,7 +188,8 @@
 - `src/pat_pipeline/README.md`
 **Estimated scope:** Small
 
-## Task 10: New tests (isolation + behavior + compat)
+## Task 10: New tests (isolation + behavior + compat) [DONE]
+- 15 new tests, full suite 62 passed: isolation (7), behavior (5), scheduled-hold (3).
 **Description:** Add focused pytest coverage per Prompt.md S9.
 **Acceptance criteria:**
 - [ ] Public imports succeed in clean process; no Qt/ui import

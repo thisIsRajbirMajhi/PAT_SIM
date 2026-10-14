@@ -5,6 +5,11 @@ Covers the latent `NameError` in the original `pat_loop._controller_ctx`
 flow explicitly from the blink/hidden schedule into the controller ctx,
 for both `Frame` and raw-array inputs.
 """
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
 import numpy as np
 
 from fsoc_tracker.common.data import Frame
