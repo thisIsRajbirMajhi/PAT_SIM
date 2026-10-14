@@ -1,12 +1,4 @@
-from enum import Enum
+"""Legacy compatibility: canonical implementation lives in pat_common.enums."""
+from pat_common.enums import TrackingState
 
-
-class TrackingState(str, Enum):
-    IDLE = "IDLE"
-    SEARCHING = "SEARCHING"
-    CANDIDATE = "CANDIDATE"
-    ACQUIRING = "ACQUIRING"
-    LOCKED = "LOCKED"
-    TEMP_LOST = "TEMP_LOST"
-    REACQUIRING = "REACQUIRING"
-    FAILED = "FAILED"
+__all__ = ["TrackingState"]

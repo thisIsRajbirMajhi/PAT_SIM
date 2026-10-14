@@ -11,8 +11,8 @@ The host supplies frames and applies returned commands with its own
 camera/actuator adapter; ground truth must never enter this module.
 """
 
-from fsoc_tracker.common.types import ControlCommand, Detection, Estimate
-from fsoc_tracker.target.dynamics.visibility import is_blink_off, is_hidden
+from pat_common.types import ControlCommand, Detection, Estimate
+from pat_common.visibility import is_blink_off, is_hidden
 
 from ..detection import BeaconDetector
 from ..state import is_search_state

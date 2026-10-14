@@ -1,10 +1,4 @@
-from dataclasses import dataclass
+"""Legacy compatibility: canonical implementation lives in pat_common.types."""
+from pat_common.types import ControlCommand
 
-
-@dataclass
-class ControlCommand:
-    pan_rate: float = 0.0  # deg/s
-    tilt_rate: float = 0.0
-    saturated: bool = False
-    search_mode: bool = False
-    search_case: str = ""
+__all__ = ["ControlCommand"]

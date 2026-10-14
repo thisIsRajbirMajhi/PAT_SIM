@@ -1,7 +1,7 @@
 """Acquisition state machine — canonical implementation (moved verbatim from tracking/state_machine.py)."""
 from collections import deque
 
-from fsoc_tracker.common.enums import TrackingState
+from pat_common.enums import TrackingState
 
 
 class TrackingStateMachine:
