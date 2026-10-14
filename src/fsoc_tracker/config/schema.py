@@ -1,12 +1,4 @@
-from typing import Any, Dict
+"""Legacy compatibility: canonical implementation lives in pat_common.config."""
+from pat_common.config.schema import validate_config
 
-from .validation import validate_controller, validate_disturbances, validate_environment, validate_scene, validate_target
-
-
-def validate_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    validate_scene(cfg)
-    validate_target(cfg)
-    validate_disturbances(cfg)
-    validate_environment(cfg)
-    validate_controller(cfg)
-    return cfg
+__all__ = ["validate_config"]

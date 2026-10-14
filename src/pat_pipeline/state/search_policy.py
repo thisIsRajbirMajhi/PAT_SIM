@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from fsoc_tracker.common.enums import TrackingState
+from pat_common.enums import TrackingState
 
 # States where the gimbal must run the search controller (mirrors CameraController.step).
 SEARCH_STATES = frozenset({TrackingState.SEARCHING, TrackingState.REACQUIRING, TrackingState.FAILED})

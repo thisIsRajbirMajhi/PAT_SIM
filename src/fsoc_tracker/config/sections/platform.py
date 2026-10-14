@@ -1,1 +1,4 @@
-PLATFORM_DEFAULTS = {"type": "linear", "speed_px_per_frame": 0.0, "amplitude": 0.0}
+"""Legacy compatibility: canonical implementation lives in pat_common.config.sections."""
+from pat_common.config.sections.platform import PLATFORM_DEFAULTS
+
+__all__ = ["PLATFORM_DEFAULTS"]

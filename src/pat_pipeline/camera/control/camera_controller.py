@@ -2,8 +2,8 @@
 import math
 
 from .pid import PIDController
-from fsoc_tracker.common.types import Estimate, ControlCommand
-from fsoc_tracker.common.enums import TrackingState
+from pat_common.types import Estimate, ControlCommand
+from pat_common.enums import TrackingState
 from pat_pipeline.state.search_policy import (
     SearchCase,
     SearchContext,

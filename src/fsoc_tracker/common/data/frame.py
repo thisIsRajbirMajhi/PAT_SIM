@@ -1,19 +1,4 @@
-from dataclasses import dataclass
-from typing import Optional, Tuple
+"""Legacy compatibility: canonical implementation lives in pat_common.types."""
+from pat_common.types import Frame, GroundTruth
 
-import numpy as np
-
-
-@dataclass
-class Frame:
-    image: np.ndarray
-    frame_id: int
-    timestamp: float
-    source_name: str = "synthetic"
-
-
-@dataclass
-class GroundTruth:
-    world_pos: Tuple[float, float]  # in world pixels
-    visible: bool
-    image_pos: Optional[Tuple[float, float]] = None  # in camera frame pixels, None if outside FOV
+__all__ = ["Frame", "GroundTruth"]

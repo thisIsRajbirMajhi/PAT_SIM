@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 
-from fsoc_tracker.common.types import Detection
+from pat_common.types import Detection
 
 
 class BeaconDetector:

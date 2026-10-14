@@ -3,7 +3,7 @@
 Single source of truth remains config/defaults.py:DEFAULT_CONFIG;
 re-exported here for discoverability and standalone use.
 """
-from fsoc_tracker.config.defaults import DEFAULT_CONFIG
+from pat_common.config.defaults import DEFAULT_CONFIG
 
 CAMERA_DEFAULTS = DEFAULT_CONFIG["camera"]
 CONTROLLER_DEFAULTS = DEFAULT_CONFIG["controller"]
