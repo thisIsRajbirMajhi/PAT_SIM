@@ -62,6 +62,7 @@ from fsoc_tracker.evaluation.auto_logger import RobustPerfLogger
 # count 1-5, blink 0-50 Hz, stars density 0-0.006.
 # --------------------------------------------------------------------------
 from fsoc_tracker.config.stress_presets import SCENARIOS, FAR_START
+from scenario_gen import random_scenario
 
 # Pass thresholds (mirror the dashboard badges).
 RMSE_PASS = 10.0
@@ -240,65 +241,9 @@ def traversal_verdict(res, cfg):
 
 
 # --------------------------------------------------------------------------
-# Fuzz sampler: seeded random configs inside validated ranges (see
-# config/validation + stress_presets tuning notes). Every run is exactly
-# reproducible from its printed seed.
+# Fuzz scenarios are sampled by scenario_gen (next to this file) inside
+# validated ranges; every run is exactly reproducible from its printed seed.
 # --------------------------------------------------------------------------
-FUZZ_CORNERS = [[300, 300], [1700, 300], [300, 1700], [1700, 1700]]
-FUZZ_TRAJS = ["straight", "straight", "figure_eight", "circular", "sinusoidal"]
-FUZZ_PLATFORMS = ["none", "none", "linear", "random"]
-FUZZ_ATMO = ["clear", "haze", "fog"]
-
-
-def sample_fuzz(rng):
-    """(desc, overrides, frames) sampled from rng (random.Random)."""
-    corner = rng.choice(FUZZ_CORNERS)
-    traj = rng.choice(FUZZ_TRAJS)
-    tgt = {
-        "initial_mode": "user-defined",
-        "initial_pos": list(corner),
-        "trajectory": traj,
-        "speed_px_per_frame": round(rng.uniform(1.0, 12.0), 1),
-        "size": rng.randint(6, 14),
-        "count": rng.choice([1, 1, 1, 2, 3, 5]),
-        "blink_rate_hz": 0.0 if rng.random() < 0.5 else round(rng.uniform(1.0, 10.0), 1),
-    }
-    if rng.random() < 0.5:
-        t0 = round(rng.uniform(1.0, 8.0), 1)
-        tgt["visibility_schedule"] = [[t0, round(t0 + 2.0, 1), "hidden"]]
-    ov = {"target": tgt, "camera": {"initial_position": "centre"}}
-    noise = {}
-    if rng.random() < 0.5:
-        noise["gaussian_enabled"] = True
-        noise["gaussian_std"] = round(rng.uniform(2.0, 20.0), 1)
-    if rng.random() < 0.4:
-        noise["salt_pepper_enabled"] = True
-        noise["salt_pepper_prob"] = round(rng.uniform(0.01, 0.12), 3)
-    if rng.random() < 0.3:
-        noise["poisson"] = True
-    if noise:
-        ov["noise"] = noise
-    ov["camera"]["jitter_px"] = round(rng.uniform(0.0, 10.0), 1)
-    if rng.random() < 0.4:
-        ov["atmosphere"] = {"type": rng.choice(FUZZ_ATMO),
-                            "strength": round(rng.uniform(0.1, 0.45), 2)}
-    ptype = rng.choice(FUZZ_PLATFORMS)
-    if ptype != "none":
-        ov["platform"] = {"type": ptype,
-                          "speed_px_per_frame": round(rng.uniform(1.0, 12.0), 1)}
-    if rng.random() < 0.5:
-        env = {"stars_enabled": True,
-               "stars_density": round(rng.uniform(0.001, 0.004), 4),
-               "stars_brightness": 185}
-        if rng.random() < 0.25:
-            env["vignetting_enabled"] = True
-            env["vignetting_strength"] = round(rng.uniform(0.2, 0.42), 2)
-        ov["environment"] = env
-    frames = rng.choice([600, 900])
-    desc = (f"corner={corner} {traj}@{tgt['speed_px_per_frame']}px/f "
-            f"size={tgt['size']}x{tgt['count']} blink={tgt['blink_rate_hz']} "
-            f"jitter={ov['camera']['jitter_px']}")
-    return desc, ov, frames
 
 
 def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
@@ -667,7 +612,7 @@ def main(argv=None):
         if n_fuzz > 0:
             rng = random.Random(args.fuzz_seed if args.fuzz_seed is not None else args.seed)
             for k in range(n_fuzz):
-                desc, ov, fr = sample_fuzz(rng)
+                desc, ov, fr = random_scenario(rng)
                 run_seed = rng.randrange(2 ** 31 - 1)
                 cfg = deep_merge(load_config(args.config, overrides=parse_set(args.set) or None),
                                  copy.deepcopy(ov))
