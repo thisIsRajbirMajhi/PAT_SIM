@@ -54,14 +54,16 @@ def test_build_case_config_applies_winner(tmp_path):
     from headless import X_DEFS, build_case_config, set_winner_overrides
     set_winner_overrides(None)
     try:
+        xd = next(d for d in X_DEFS if d["key"] == "X1")
+        baseline = build_case_config(xd, 42)
+        base_speed = baseline["target"]["speed_px_per_frame"]
         p = tmp_path / "w.json"
         p.write_text('{"detector": {"threshold_k": 3.5}, "target": {"speed_px_per_frame": 99}}')
         set_winner_overrides(str(p))
-        xd = next(d for d in X_DEFS if d["key"] == "X1")
         cfg = build_case_config(xd, 42)
         assert cfg["detector"]["threshold_k"] == 3.5
         # dropped test-condition key must not leak into the case config
-        assert cfg["target"]["speed_px_per_frame"] == 3.0
+        assert cfg["target"]["speed_px_per_frame"] == base_speed != 99
     finally:
         headless.set_winner_overrides(None)
 
@@ -105,3 +107,55 @@ def test_apply_spec_winner_propagates_to_workers():
         assert headless.WINNER_OVERRIDES["detector"]["threshold_k"] == 3.5
     finally:
         headless.set_winner_overrides(None)
+
+
+def test_apply_spec_winner_resets_without_winner():
+    import headless
+    from headless import _apply_spec_winner
+    headless.WINNER_OVERRIDES = {"detector": {"threshold_k": 3.5}}
+    try:
+        _apply_spec_winner({"kind": "X"})
+        assert headless.WINNER_OVERRIDES == {}
+        headless.WINNER_OVERRIDES = {"detector": {"threshold_k": 3.5}}
+        _apply_spec_winner({"kind": "X", "winner": {}})
+        assert headless.WINNER_OVERRIDES == {}
+    finally:
+        headless.set_winner_overrides(None)
+
+
+def test_set_winner_overrides_returns_copy(tmp_path):
+    import headless
+    from headless import set_winner_overrides
+    p = tmp_path / "w.json"
+    p.write_text('{"detector": {"threshold_k": 3.5}}')
+    try:
+        got = set_winner_overrides(str(p))
+        got["detector"]["threshold_k"] = 99.0
+        got["injected"] = True
+        assert headless.WINNER_OVERRIDES["detector"]["threshold_k"] == 3.5
+        assert "injected" not in headless.WINNER_OVERRIDES
+    finally:
+        headless.set_winner_overrides(None)
+
+
+def test_main_missing_config_exits_friendly(tmp_path, monkeypatch, capsys):
+    import sys
+    import headless
+    missing = str(tmp_path / "nope.json")
+    monkeypatch.setattr(sys, "argv", ["headless.py", "--config", missing])
+    rc = headless.main()
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert missing in out
+
+
+def test_main_bad_json_config_exits_friendly(tmp_path, monkeypatch, capsys):
+    import sys
+    import headless
+    p = tmp_path / "bad.json"
+    p.write_text("{not json")
+    monkeypatch.setattr(sys, "argv", ["headless.py", "--config", str(p)])
+    rc = headless.main()
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert str(p) in out

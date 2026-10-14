@@ -615,7 +615,7 @@ def set_winner_overrides(path: str | None) -> dict:
         if kept_cam:
             kept["camera"] = kept_cam
     WINNER_OVERRIDES = kept
-    return WINNER_OVERRIDES
+    return copy.deepcopy(WINNER_OVERRIDES)
 
 
 def _split_winner_overrides():
@@ -648,6 +648,8 @@ def _apply_spec_winner(spec):
     w = spec.get("winner")
     if isinstance(w, dict) and w:
         WINNER_OVERRIDES = copy.deepcopy(w)
+    else:
+        WINNER_OVERRIDES = {}
 
 
 def build_case_config(xdef, seed):
@@ -1376,7 +1378,14 @@ def main():
     ap.add_argument("--no-diff", action="store_true", help="skip regression diff")
     args = ap.parse_args()
     R.set_color_mode("never" if args.no_color else args.color)
-    set_winner_overrides(args.config)
+    try:
+        set_winner_overrides(args.config)
+    except FileNotFoundError:
+        print(f"error: --config file not found: {args.config}")
+        return 2
+    except json.JSONDecodeError:
+        print(f"error: --config file is not valid JSON: {args.config}")
+        return 2
 
     tags = [t.strip() for t in args.tag.split(",")] if args.tag else None
     severities = [s.strip() for s in args.severity.split(",")] if args.severity else None

@@ -7,6 +7,7 @@ lazily inside functions so unit tests stay fast.
 import argparse
 import copy
 import json
+import math
 import os
 import time
 
@@ -117,10 +118,22 @@ def _case_loss(result, benchmarks):
         loss += _ERROR_PENALTY if verdict == "ERROR" else _FAIL_PENALTY
 
     lock = result.get("lock_pct", 0.0) or 0.0
-    loss += max(0.0, bench_lock - float(lock)) * _W_LOCK
+    try:
+        lock_f = float(lock)
+    except (TypeError, ValueError):
+        lock_f = 0.0
+    if not math.isfinite(lock_f):
+        lock_f = 0.0  # worst-case; fail/ERROR penalties still dominate
+    loss += max(0.0, bench_lock - lock_f) * _W_LOCK
 
     rmse = result.get("rmse", 0.0) or 0.0
-    loss += max(0.0, float(rmse) - bench_rmse) * _W_RMSE
+    try:
+        rmse_f = float(rmse)
+    except (TypeError, ValueError):
+        rmse_f = bench_rmse
+    if not math.isfinite(rmse_f):
+        rmse_f = bench_rmse + _FAIL_PENALTY / _W_RMSE  # worst-case, below ERROR
+    loss += max(0.0, rmse_f - bench_rmse) * _W_RMSE
 
     first = result.get("first_lock")
     if first is None:
@@ -153,17 +166,16 @@ FAST_SUBSET = (
     + [(k, 42) for k in ("E4", "E5", "E13", "E15", "E20")]
 )
 
-# Camera start keys applied AFTER the base build (post far-start), same
-# split as Task 1 (`headless._CAMERA_START_KEYS`).
-_CAMERA_START_KEYS = ("initial_position", "initial_pan", "initial_tilt")
-
-
 def _split_local_overrides(overrides):
     """Split trial overrides into (pre, post) batches.
 
     `post` holds the camera start keys merged after the base case config
     (so they survive `enforce_far_start`); `pre` holds everything else.
+    Start keys come from `headless._CAMERA_START_KEYS` (single source).
     """
+    import headless as _h
+
+    start_keys = _h._CAMERA_START_KEYS
     overrides = overrides or {}
     pre = {}
     post = {}
@@ -172,8 +184,8 @@ def _split_local_overrides(overrides):
             pre[section] = kv
             continue
         if section == "camera":
-            pre_cam = {k: v for k, v in kv.items() if k not in _CAMERA_START_KEYS}
-            post_cam = {k: v for k, v in kv.items() if k in _CAMERA_START_KEYS}
+            pre_cam = {k: v for k, v in kv.items() if k not in start_keys}
+            post_cam = {k: v for k, v in kv.items() if k in start_keys}
             if pre_cam:
                 pre[section] = pre_cam
             if post_cam:
@@ -202,6 +214,19 @@ def evaluate_subset(overrides, subset=None, timeout_s=300.0):
 
     import headless
     from pat_common.config.loader import deep_merge
+
+    _CAM_ALLOW = {"initial_position", "initial_pan", "initial_tilt",
+                  "update_interval_hz"}
+    _bad = []
+    for _section, _kv in (overrides or {}).items():
+        if _section in ("detector", "tracker", "controller"):
+            continue
+        elif _section == "camera" and isinstance(_kv, dict):
+            _bad.extend(f"camera.{k}" for k in _kv if k not in _CAM_ALLOW)
+        else:
+            _bad.append(str(_section))
+    if _bad:
+        raise ValueError(f"overrides contain non-system keys: {sorted(_bad)}")
 
     subset = list(subset) if subset is not None else list(FAST_SUBSET)
     pre, post = _split_local_overrides(overrides)
@@ -237,6 +262,23 @@ def evaluate_subset(overrides, subset=None, timeout_s=300.0):
     return results
 
 
+def _coerce_workers(workers):
+    """Coerce to int, rejecting non-integral values (e.g. 1.9, "1.9").
+
+    Integer-valued strings ("4") and floats (4.0) still work.
+    """
+    try:
+        as_float = float(workers)
+    except (TypeError, ValueError):
+        raise ValueError(f"workers must be an integer >= 1, got {workers!r}")
+    if not math.isfinite(as_float) or as_float != int(as_float):
+        raise ValueError(f"workers must be an integer >= 1, got {workers!r}")
+    workers = int(as_float)
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    return workers
+
+
 def run_study(trials=20, workers=1, study_name="tune",
               storage="sqlite:///runs/tune.db", timeout_s=300.0, stage=None):
     """Run an Optuna study over FAST_SUBSET and return the study.
@@ -251,9 +293,7 @@ def run_study(trials=20, workers=1, study_name="tune",
 
     import optuna
 
-    workers = int(workers)
-    if workers < 1:
-        raise ValueError(f"workers must be >= 1, got {workers}")
+    workers = _coerce_workers(workers)
     subset = list(FAST_SUBSET)
 
     def objective(trial):
@@ -303,7 +343,7 @@ def _write_json(path, payload):
 
 
 def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
-                  frames_override: int | None = None) -> dict:
+                  frames_override: int | None = None, stamp: str | None = None) -> dict:
     """Validate a winner JSON against the full 80-case suite.
 
     Exercises the real Task 1 path: `set_winner_overrides(winner_path)`
@@ -313,7 +353,9 @@ def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
     never threads). Per-case timeout passes into X/E cases.
 
     `frames_override` is a TEST-ONLY accelerator (small frame counts);
-    default None = real frames. Never wired into the CLI path.
+    default None = real frames. Never wired into the CLI path. `stamp`
+    lets the caller share one filename stamp between the validation
+    report and the best artifact (CLI passes its per-candidate stamp).
 
     Returns at minimum `{fails, errors, verdict ("PASS"/"FAIL"),
     report_paths}` and writes `runs/tune_<stamp>_validation.json`.
@@ -324,9 +366,7 @@ def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
 
     import headless
 
-    workers = int(workers)
-    if workers < 1:
-        raise ValueError(f"workers must be >= 1, got {workers}")
+    workers = _coerce_workers(workers)
 
     saved = copy.deepcopy(headless.WINNER_OVERRIDES)
     try:
@@ -357,7 +397,7 @@ def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
             fails += 1
     verdict = "PASS" if (fails == 0 and errors == 0) else "FAIL"
 
-    stamp = _stamp()
+    stamp = stamp or _stamp()
     report = os.path.join("runs", f"tune_{stamp}_validation.json")
     payload = {
         "winner": winner_path,
@@ -407,7 +447,9 @@ def write_best_artifact(overrides, value, trial_number, round_idx, stage,
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Optuna tuning harness")
     ap.add_argument("--trials", type=int, default=20)
-    ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="process count for full validation of each candidate "
+                         "(the study loop itself runs sequentially)")
     ap.add_argument("--study", default="tune")
     ap.add_argument("--storage", default="sqlite:///runs/tune.db")
     ap.add_argument("--subset", default="fast")
@@ -448,7 +490,7 @@ def main(argv=None):
                 "runs", f"tune_{stamp}_round{round_idx}_top{rank}.json")
             _write_json(winner_path, overrides)
             rep = validate_full(winner_path, workers=args.workers,
-                                timeout_s=args.timeout)
+                                timeout_s=args.timeout, stamp=stamp)
             best_path = write_best_artifact(
                 overrides, trial.value, trial.number,
                 round_idx, stage, stamp=stamp)
