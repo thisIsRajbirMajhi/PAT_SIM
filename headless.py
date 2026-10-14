@@ -26,6 +26,11 @@ Full gauntlet (extreme suite + 20 fuzz scenarios, exits 1 on traversal FAIL):
     python headless.py --gauntlet
     python headless.py --gauntlet --fuzz 30 --fuzz-seed 99
 
+Unified tuning workflow (same entry point, subcommands):
+    python headless.py tune --trials 30               # tune PID+filter space
+    python headless.py tune --stages "pid:30,search:20" --refine 10 --hard
+    python headless.py board                          # study web dashboard
+
 Every scenario prints two verdicts side by side:
     VERDICT-DASH ...  dashboard thresholds (RMSE, loss/acq, reacq, FPS)
     VERDICT-TRAV ...  pipeline-traversal proof (reached TRACKING, post-lock
@@ -759,6 +764,16 @@ def build_parser():
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Unified entry point: subcommands dispatch to the companion modules
+    # (lazy imports: tune.py imports this file, so importing it eagerly
+    # would create a cycle).
+    if argv[:1] == ["tune"]:
+        from tune import main as tune_main
+        return tune_main(argv[1:])
+    if argv[:1] == ["board"]:
+        from dashboard import main as board_main
+        return board_main(argv[1:])
     ap = build_parser()
     args = ap.parse_args(argv)
 
