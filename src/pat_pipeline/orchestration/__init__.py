@@ -1,1 +1,3 @@
-"""End-to-end orchestration (canonical home; see pat_loop.py)."""
+from .pat_loop import SearchTrackPipeline
+
+__all__ = ["SearchTrackPipeline"]
