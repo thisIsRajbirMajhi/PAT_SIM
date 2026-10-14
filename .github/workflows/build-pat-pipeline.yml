@@ -29,7 +29,7 @@ jobs:
       - name: Headless smoke scenario
         env:
           PYTHONPATH: src
-        run: python headless.py --scenario X1-baseline --frames 120 --seed 42 --no-log --every 0
+        run: python headless.py --scenario X1-baseline --seed 42 --no-log --every 0
       - name: Package extracted repository
         run: |
           mkdir -p "$RUNNER_TEMP/dist"
