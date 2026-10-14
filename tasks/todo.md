@@ -205,7 +205,9 @@
 - `tests/test_pat_pipeline_*.py`
 **Estimated scope:** Medium
 
-## Task 11: Full regression + report
+## Task 11: Full regression + report [DONE]
+- pytest 62 passed. Extreme suite on branch: 8 PASS, 2 FAIL (X4 post-lock, X5 reacq/post-lock) — both proven pre-existing via `master` worktree with byte-identical deterministic metrics.
+- X1/X4/X5/X6/X9 pre/post deterministic metrics identical (detections, centroids, RMSE, lock/loss, search cases, stages, SM, post-lock frame). Only wall-clock fields (acq/reacq time, FPS/latency) vary.
 **Description:** Run pytest + representative headless scenarios (+ extreme if supported), compare pre/post, write final report.
 **Acceptance criteria:**
 - [ ] `python -m pytest -q` result documented
