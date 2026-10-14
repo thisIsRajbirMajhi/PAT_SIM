@@ -20,7 +20,7 @@ frame -> BeaconDetector -> Tracker (IMM + state machine)
 | `track/` | `Tracker` (predict/update/state → `Estimate`), `DisplayTracker`/`DisplayStatus` (GUI-free status truth) |
 | `orchestration/` | `SearchTrackPipeline` — the shared per-frame orchestrator |
 | `camera/` | `VirtualCamera` + `geometry`, `PIDController` + `CameraController` |
-| `config.py` | defaults accessors (values owned by `fsoc_tracker.config.defaults`) |
+| `config.py` | defaults accessors (values owned by `pat_common.config.defaults`) |
 | `factory.py` | `make_detector/make_tracker/make_controller/make_camera/make_pipeline` |
 
 Legacy `fsoc_tracker.pipeline.*` and `fsoc_tracker.camera.*` modules remain as
@@ -99,13 +99,19 @@ if is_ptz:
 Sensor acquisition, world advancement, metrics/logging, and rendering stay
 in the host (`headless.py`, `fsoc_tracker/ui/`).
 
-## Shared dependencies (imported, never copied)
+## Shared core (no copy, no GUI/simulator)
 
-- `fsoc_tracker.common.types` / `common/data/` / `common/enums/` — one
-  authoritative definition of `Frame`, `Detection`, `Estimate`,
-  `ControlCommand`, `TrackingState`, …
-- `fsoc_tracker.config.defaults` (+ loader/validation) — config source of truth.
-- `fsoc_tracker.target.dynamics.visibility` — blink/hidden schedule helpers.
+- `pat_common.types` / `pat_common.enums` — one authoritative definition of
+  `Frame`, `Detection`, `Estimate`, `ControlCommand`, `TrackingState`, …
+- `pat_common.config` (defaults, sections, loader, validation) — config
+  source of truth.
+- `pat_common.visibility` — blink/hidden schedule helpers.
+- `pat_common.kinds` — trajectory / platform type vocabularies.
+
+Legacy `fsoc_tracker.common.*`, `fsoc_tracker.config.*`, and
+`fsoc_tracker.target.dynamics.visibility` paths re-export these exact
+objects. Importing `pat_pipeline` loads zero `fsoc_tracker` modules
+(verified) and no Qt.
 
 ## Testing without a GUI
 
@@ -124,8 +130,8 @@ pip install -e ".[gui]" # full application with GUI
 
 ## Known limitations / future separation
 
-- Shared types/enums/config/visibility still live under `fsoc_tracker`;
-  moving them into `pat_pipeline` (or a third shared package) is future work.
+- `pat_pipeline` + `pat_common` ship inside this repo's `src/` layout; a
+  standalone distribution (own install metadata) is future work.
 - `acquisition_time_s`/`reacquisition` metrics in the host layer use
   wall-clock time and vary run to run; deterministic frame-level outputs
   (detections, estimates, commands, states) are the equivalence signal.

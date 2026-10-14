@@ -13,13 +13,14 @@ Layout:
                        command; controller injected to avoid cycles)
         camera/        VirtualCamera + geometry + PIDController + CameraController
         config.py      detector/tracker/camera/controller defaults + accessors
-                       (values owned by fsoc_tracker.config.defaults)
+                       (values owned by pat_common.config.defaults)
         factory.py     make_detector()/make_tracker()/make_controller()/
                        make_camera()/make_pipeline()
 
-Shared-ownership rule: genuinely shared, GUI-free definitions (common types,
-enums, config defaults/loading, target visibility) stay in `fsoc_tracker`
-and are imported, never copied. The gimbal action lives in
+Shared-ownership rule: dependency-free shared definitions (common types,
+enums, config defaults/loading, target visibility) live in `pat_common`
+and are imported, never copied. `fsoc_tracker` legacy paths re-export the
+same objects. The gimbal action lives in
 pat_pipeline.camera; this package owns the search-vs-track decision spec
 (state/search_policy) plus the end-to-end tick orchestration.
 
