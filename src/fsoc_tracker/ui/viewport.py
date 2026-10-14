@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import QWidget, QSizePolicy
 from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QFont
 
-from ..pipeline.track.display import DisplayStatus, DisplayState, TrackTelemetry
+from pat_pipeline.track.display import DisplayStatus, DisplayState, TrackTelemetry
 
 
 class CameraView(QWidget):

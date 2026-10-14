@@ -8,15 +8,14 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFont
 from .viewport import CameraView, WorldView
-from ..pipeline.track.display import DisplayTracker
+from pat_pipeline import make_pipeline
+from pat_pipeline.track.display import DisplayTracker
 from .control_deck import ControlDeck
 from .benchmark_dialog import BenchmarkResultDialog
 from .live_dashboard_window import LiveDashboardWindow
 from ..config.loader import load_config
 from ..input.synthetic_source import SyntheticSource
 from ..input.video_source import VideoSource
-from ..pipeline import BeaconDetector, Tracker
-from ..camera import CameraController
 from ..evaluation.metrics import MetricsCollector
 from ..evaluation.report import export_run
 from ..evaluation.auto_logger import RobustPerfLogger
@@ -157,9 +156,12 @@ class MainWindow(QMainWindow):
     # ---------------- pipeline (unchanged logic) ----------------
     def _init_pipeline(self):
         self.source = None
-        self.detector = BeaconDetector(self.cfg)
-        self.tracker = Tracker(self.cfg)
-        self.controller = CameraController(self.cfg)
+        # Canonical pipeline owns exactly one detector + tracker + controller.
+        # Aliases below keep attribute access working for the UI layer.
+        self.pipe = make_pipeline(self.cfg)
+        self.detector = self.pipe.detector
+        self.tracker = self.pipe.tracker
+        self.controller = self.pipe.controller
         self.metrics = MetricsCollector()
         self.auto_logger = RobustPerfLogger(base_dir="outputs/runs", metrics_collector=self.metrics)
         self.display = DisplayTracker(self.cfg)
@@ -174,10 +176,6 @@ class MainWindow(QMainWindow):
         self.last_estimate = None
         self.last_gt = None
         self._overlays_enabled = True
-        # Sr.15 control-rate hold: sensor runs at fps, gimbal at update_interval_hz
-        self._tick_id = 0
-        self._last_cmd = None
-        self._latched = False
         self._create_source()
 
     def _create_source(self):
@@ -227,11 +225,7 @@ class MainWindow(QMainWindow):
             self.metrics.start_run()
             self.metrics.input_fps = float(self.cfg["camera"]["fps"])
             self.auto_logger.begin_run(self.cfg)
-            self.tracker.reset()
-            self.controller.reset()
-            self._tick_id = 0
-            self._last_cmd = None
-            self._latched = False
+            self.pipe.reset()
             if hasattr(self.source, "reset"):
                 self.source.reset()
             # coarse cue: target starts rendered in Camera FOV, loop centers it.
@@ -279,11 +273,7 @@ class MainWindow(QMainWindow):
         self.btn_pause.setEnabled(False)
         self.metrics.reset()
         self.metrics.input_fps = float(self.cfg["camera"]["fps"])
-        self.tracker.reset()
-        self.controller.reset()
-        self._tick_id = 0
-        self._last_cmd = None
-        self._latched = False
+        self.pipe.reset()
         if self.source and hasattr(self.source, "reset"):
             self.source.reset()
         self.display.reset()
@@ -324,49 +314,13 @@ class MainWindow(QMainWindow):
                 pass
             return
 
-        pred = self.tracker.get_predicted_pixel() if hasattr(self.tracker, "get_predicted_pixel") else None
-        try:
-            _miss0 = int(getattr(getattr(self.tracker, "sm", None), "missed", 0))
-        except Exception:
-            _miss0 = 0
-        try:
-            _fresh = bool(getattr(self, "_latched", False)) and _miss0 <= 30
-            _gate = self.tracker.get_gate_radius_px(missed=_miss0) if (hasattr(self.tracker, "get_gate_radius_px") and _fresh) else None
-        except Exception:
-            _gate = None
-        try:
-            detection = self.detector.detect(frame.image, predicted_pos=pred, gate_radius_px=_gate)
-        except TypeError:
-            detection = self.detector.detect(frame.image, predicted_pos=pred)
-        try:
-            from ..target.dynamics.visibility import is_blink_off as _boff, is_hidden as _hid
-            _hold = bool(_boff(getattr(frame, "frame_id", 0), self.cfg) or _hid(getattr(frame, "frame_id", 0), self.cfg))
-        except Exception:
-            _hold = False
-        try:
-            _ego = (float(getattr(self.controller, "prev_pan_rate", 0.0)),
-                    float(getattr(self.controller, "prev_tilt_rate", 0.0))) \
-                if self.controller is not None else (0.0, 0.0)
-        except Exception:
-            _ego = (0.0, 0.0)
-        try:
-            estimate = self.tracker.step(detection, frame, hold=False, ego_rate=_ego)
-        except TypeError:
-            estimate = self.tracker.step(detection, frame)
-        try:
-            if getattr(estimate.tracking_state, "value", "") == "LOCKED":
-                self._latched = True
-        except Exception:
-            pass
-
-        # FOV geometry for this exact frame (camera still pre-move, matches frame_img)
+        # Host-side camera context from pre-move geometry (matches the frame
+        # pixels). Video sources have no gimbal: in_fov follows detection.
         _in_fov = None
         try:
             if isinstance(self.source, SyntheticSource) and gt is not None \
                     and getattr(gt, "world_pos", None) not in (None, (0, 0)):
                 _in_fov = self.source.camera.world_to_image(gt.world_pos) is not None
-            elif isinstance(self.source, VideoSource):
-                _in_fov = True if detection.valid else None
         except Exception:
             _in_fov = None
         try:
@@ -376,44 +330,25 @@ class MainWindow(QMainWindow):
                 if isinstance(self.source, SyntheticSource) else False
         except Exception:
             _lim = False
+        try:
+            _ego = (float(getattr(self.controller, "prev_pan_rate", 0.0)),
+                    float(getattr(self.controller, "prev_tilt_rate", 0.0))) \
+                if self.controller is not None else (0.0, 0.0)
+        except Exception:
+            _ego = (0.0, 0.0)
 
-        # Sr.15: sensor fps vs control update_interval_hz — hold last gimbal
-        # command between control ticks so the configured rate is enforced.
+        # Sr.15: sensor fps vs control update_interval_hz.
         fps_cfg = max(float(self.cfg["camera"].get("fps", 30.0)), 1)
         upd_cfg = max(float(self.cfg["camera"].get("update_interval_hz", fps_cfg)), 1)
         dt_ctrl = 1.0 / upd_cfg
-        if upd_cfg >= fps_cfg:
-            control_due = True
-        else:
-            every = max(1, int(round(fps_cfg / upd_cfg)))
-            control_due = (self._tick_id % every) == 0
-        if control_due or self._last_cmd is None:
+        # Canonical per-frame chain (GT never enters the pipeline).
+        detection, estimate, cmd = self.pipe.step_frame(
+            frame, dt=dt_ctrl, in_fov=_in_fov, at_limit=_lim, ego_rate=_ego)
+        if _in_fov is None and isinstance(self.source, VideoSource):
             try:
-                _sm0 = getattr(self.tracker, "sm", None)
-                _miss0 = int(getattr(_sm0, "missed", 0))
-                _cctx = {
-                    "missed": _miss0,
-                    "cand_frames": int(getattr(_sm0, "candidate_frames", 0)),
-                    "locked_frames": int(getattr(_sm0, "locked_frames", 0)),
-                    "det_valid": bool(detection.valid),
-                    "det_conf": float(detection.confidence or 0.0),
-                    "in_fov": _in_fov,
-                    "latched": bool(getattr(self, "_latched", False) and _miss0 <= 60),
-                    "scheduled_hold": bool(_hold),
-                    "saturated": False,
-                    "at_limit": bool(_lim),
-                    "ego_rate": max(abs(float(_ego[0])), abs(float(_ego[1]))),
-                }
+                _in_fov = True if detection.valid else None
             except Exception:
-                _cctx = None
-            try:
-                cmd = self.controller.step(estimate, dt=dt_ctrl, ctx=_cctx)
-            except TypeError:
-                cmd = self.controller.step(estimate, dt=dt_ctrl)
-            self._last_cmd = cmd
-        else:
-            cmd = self._last_cmd
-        self._tick_id += 1
+                pass
         is_ptz = getattr(self.source, "is_ptz_enabled", isinstance(self.source, SyntheticSource))
         if is_ptz:
             self.source.apply_camera_command(cmd.pan_rate, cmd.tilt_rate, dt_ctrl)
@@ -455,7 +390,7 @@ class MainWindow(QMainWindow):
                 _in_fov,
                 est_pos=getattr(estimate, "pos_px", None))
         except Exception:
-            from ..pipeline.track.display import DisplayState, TrackTelemetry, DisplayStatus
+            from pat_pipeline.track.display import DisplayState, TrackTelemetry, DisplayStatus
             _dstate = DisplayState(status=DisplayStatus.SCANNING, show_no_target=True)
             _tele = TrackTelemetry()
         # live boresight offset for this frame's detection (real pixel geometry)
