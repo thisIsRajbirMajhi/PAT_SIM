@@ -563,10 +563,100 @@ def sample_dynamic(xkey, seed, rng):
     return {}
 
 
+WINNER_OVERRIDES: dict = {}
+
+# Camera keys a winner file may override. Fixed hardware (fps,
+# max_pan/tilt_speed, fov_deg, resolution, ...) is always dropped.
+_CAMERA_ALLOWLIST = frozenset(
+    {"initial_position", "initial_pan", "initial_tilt", "update_interval_hz"})
+# Camera start keys applied AFTER enforce_far_start (which resets the
+# camera to centre and pops pan/tilt), so tuned starts survive.
+_CAMERA_START_KEYS = ("initial_position", "initial_pan", "initial_tilt")
+# update_interval_hz values below this are rejected (kept out of overrides).
+_UPDATE_INTERVAL_HZ_FLOOR = 20.0
+
+
+def set_winner_overrides(path: str | None) -> dict:
+    """Load winner system params from a JSON file, keeping only tunable keys.
+
+    Keeps `detector`/`tracker`/`controller` subtrees and the camera
+    allowlist (`initial_position`, `initial_pan`, `initial_tilt`,
+    `update_interval_hz`). Drops everything else, including fixed hardware
+    (camera `fps`, `max_pan/tilt_speed`, `fov_deg`, `resolution`) and test
+    conditions (world/target/noise/atmosphere/platform/environment/
+    experiment). `update_interval_hz` below 20 Hz is rejected. `None`
+    resets to {}.
+    """
+    global WINNER_OVERRIDES
+    if path is None:
+        WINNER_OVERRIDES = {}
+        return {}
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        data = {}
+    kept: dict = {}
+    for key in ("detector", "tracker", "controller"):
+        if isinstance(data.get(key), dict):
+            kept[key] = copy.deepcopy(data[key])
+    cam = data.get("camera")
+    if isinstance(cam, dict):
+        kept_cam = {}
+        for key in sorted(_CAMERA_ALLOWLIST):
+            if key not in cam:
+                continue
+            if key == "update_interval_hz":
+                try:
+                    if float(cam[key]) < _UPDATE_INTERVAL_HZ_FLOOR:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            kept_cam[key] = copy.deepcopy(cam[key])
+        if kept_cam:
+            kept["camera"] = kept_cam
+    WINNER_OVERRIDES = kept
+    return WINNER_OVERRIDES
+
+
+def _split_winner_overrides():
+    """Split WINNER_OVERRIDES into pre/post far-start batches.
+
+    Returns (pre, post): `post` holds the camera start keys
+    (`initial_position`, `initial_pan`, `initial_tilt`) merged AFTER
+    `enforce_far_start`; `pre` holds everything else, merged after the
+    base config and before stars/far-start.
+    """
+    pre = copy.deepcopy(WINNER_OVERRIDES)
+    post: dict = {}
+    cam = pre.get("camera")
+    if isinstance(cam, dict):
+        for key in _CAMERA_START_KEYS:
+            if key in cam:
+                post.setdefault("camera", {})[key] = cam.pop(key)
+        if not cam:
+            pre.pop("camera", None)
+    return pre, post
+
+
+def _apply_spec_winner(spec):
+    """Restore WINNER_OVERRIDES inside a worker from the spec dict.
+
+    ProcessPoolExecutor on spawn platforms (Windows) does not inherit
+    module globals, so main() embeds a copy of the overrides in each spec.
+    """
+    global WINNER_OVERRIDES
+    w = spec.get("winner")
+    if isinstance(w, dict) and w:
+        WINNER_OVERRIDES = copy.deepcopy(w)
+
+
 def build_case_config(xdef, seed):
     rng = np.random.default_rng(int(seed) * 7919 + _stable_key_offset(xdef["key"]))
     cfg = deep_merge(copy.deepcopy(DEFAULT_CONFIG), copy.deepcopy(xdef["base"]))
     cfg = deep_merge(cfg, sample_dynamic(xdef["key"], seed, rng))
+    pre_winner, post_winner = _split_winner_overrides()
+    if pre_winner:
+        cfg = deep_merge(cfg, pre_winner)
     dens, bri = xdef["star"]
     try:
         dyn_dens = cfg.get("environment", {}).get("stars_density", None)
@@ -576,6 +666,8 @@ def build_case_config(xdef, seed):
         pass
     cfg = apply_stars(cfg, dens, bri)
     cfg = enforce_far_start(cfg, xdef["corner"])
+    if post_winner:
+        cfg = deep_merge(cfg, post_winner)
     fps = max(float(cfg["camera"].get("fps", 30.0)), 1)
     cfg["experiment"]["duration_s"] = round(xdef["frames"] / fps, 2)
     cfg["experiment"]["seed"] = int(seed)
@@ -584,8 +676,13 @@ def build_case_config(xdef, seed):
 
 def build_edge_config(edef, seed=42):
     cfg = deep_merge(copy.deepcopy(DEFAULT_CONFIG), copy.deepcopy(edef["over"]))
+    pre_winner, post_winner = _split_winner_overrides()
+    if pre_winner:
+        cfg = deep_merge(cfg, pre_winner)
     cfg = apply_stars(cfg, *edef["star"])
     cfg = enforce_far_start(cfg, edef["corner"])
+    if post_winner:
+        cfg = deep_merge(cfg, post_winner)
     fps = max(float(cfg["camera"].get("fps", 30.0)), 1)
     cfg["experiment"]["duration_s"] = round(edef["frames"] / fps, 2)
     cfg["experiment"]["seed"] = int(seed)
@@ -1143,6 +1240,7 @@ def _decorate_result(r, defn):
 
 
 def _worker(spec):
+    _apply_spec_winner(spec)
     kind = spec["kind"]
     cue = spec.get("cue", False)
     timeout_s = spec.get("timeout_s", None)
@@ -1250,6 +1348,8 @@ def main():
     ap.add_argument("--gauntlet", action="store_true", help="alias for --extreme")
     ap.add_argument("--full", action="store_true", help="alias for --extreme")
     ap.add_argument("--scenario", default=None, help="single X/E/R key or name")
+    ap.add_argument("--config", default=None,
+                    help="winner JSON: detector/tracker/controller (+camera start/update_interval_hz) overrides applied to every case")
     ap.add_argument("--fuzz", type=int, default=0, help="N random X-family draws")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--frames", type=int, default=None,
@@ -1276,6 +1376,7 @@ def main():
     ap.add_argument("--no-diff", action="store_true", help="skip regression diff")
     args = ap.parse_args()
     R.set_color_mode("never" if args.no_color else args.color)
+    set_winner_overrides(args.config)
 
     tags = [t.strip() for t in args.tag.split(",")] if args.tag else None
     severities = [s.strip() for s in args.severity.split(",")] if args.severity else None
@@ -1309,6 +1410,8 @@ def main():
     for s in specs:
         s["cue"] = args.cue
         s["timeout_s"] = args.timeout if s["kind"] in ("X", "E") else None
+        if WINNER_OVERRIDES:
+            s["winner"] = copy.deepcopy(WINNER_OVERRIDES)
 
     if not specs:
         print("No cases matched the filter.")
