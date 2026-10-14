@@ -208,7 +208,7 @@ __all__ = [
         raise SystemExit("Unexpected pyproject dependency declaration; refusing to alter it.")
     pyproject.write_text(p.replace(old_deps, new_deps), encoding="utf-8")
 
-    write_text("src/pat_pipeline/README.md", '''# PAT Pipeline
+    write_text("pat_pipeline/README.md", '''# PAT Pipeline
 
 This package is the canonical GUI-independent implementation of PAT detection, estimation, search state, tracking, orchestration, virtual-camera optics, and camera control.
 
