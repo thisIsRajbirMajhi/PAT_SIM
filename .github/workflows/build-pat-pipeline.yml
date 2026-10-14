@@ -1,0 +1,43 @@
+name: Build extracted PAT pipeline ZIP
+
+on:
+  push:
+    branches:
+      - codex/pat-pipeline-extraction
+
+permissions:
+  contents: read
+
+jobs:
+  extract-test-zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install headless test dependencies
+        run: python -m pip install --upgrade pip numpy opencv-python-headless PyYAML pillow pytest
+      - name: Extract canonical pipeline
+        run: python tools/extract_pat_pipeline.py
+      - name: Compile package
+        run: python -m compileall -q src/pat_pipeline
+      - name: Test package isolation and compatibility
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests/test_pat_pipeline_package.py
+      - name: Headless smoke scenario
+        env:
+          PYTHONPATH: src
+        run: python headless.py --scenario X1-baseline --seed 42 --no-log --every 0
+      - name: Package extracted repository
+        run: |
+          mkdir -p "$RUNNER_TEMP/dist"
+          zip -qr "$RUNNER_TEMP/dist/PAT_SIM_pipeline_extracted.zip" . \
+            -x ".git/*" "*/__pycache__/*" "*.pyc" ".venv/*"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PAT_SIM_pipeline_extracted
+          path: ${{ runner.temp }}/dist/PAT_SIM_pipeline_extracted.zip
+          if-no-files-found: error
+          retention-days: 14
