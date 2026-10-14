@@ -1,8 +1,16 @@
-from .controller import validate_controller
-from .disturbances import validate_disturbances
-from .environment import validate_environment
-from .scene import validate_scene
-from .target import validate_target
+"""Legacy compatibility: canonical implementation lives in pat_common.config.validation."""
+from pat_common.config.validation import (
+    validate_controller,
+    validate_disturbances,
+    validate_environment,
+    validate_scene,
+    validate_target,
+)
 
-__all__ = ["validate_scene", "validate_target", "validate_disturbances", "validate_environment",
-           "validate_controller"]
+__all__ = [
+    "validate_controller",
+    "validate_disturbances",
+    "validate_environment",
+    "validate_scene",
+    "validate_target",
+]

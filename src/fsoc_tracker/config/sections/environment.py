@@ -1,26 +1,4 @@
-ENVIRONMENT_DEFAULTS = {
-    "gradient_enabled": False,
-    "gradient_type": "linear",
-    "gradient_top": 22,
-    "gradient_bottom": 38,
-    "gradient_angle": 90,
-    "texture_enabled": True,
-    "texture_strength": 5,
-    "stars_enabled": False,
-    "stars_density": 0.0007,
-    "stars_brightness": 185,
-    "stars_min_mag": 90,
-    "stars_max_mag": 255,
-    "stars_twinkle": False,
-    "stars_twinkle_amount": 6,
-    "stars_seed": 1337,
-    "stars_max_count": 12000,
-    "vignetting_enabled": False,
-    "vignetting_strength": 0.42,
-    "vignetting_radius": 0.72,
-    "vignetting_falloff": 2.0,
-    "vignetting_center_x": 0.5,
-    "vignetting_center_y": 0.5,
-    "brightness_gain": 1.0,
-    "brightness_offset": 0,
-}
+"""Legacy compatibility: canonical implementation lives in pat_common.config.sections."""
+from pat_common.config.sections.environment import ENVIRONMENT_DEFAULTS
+
+__all__ = ["ENVIRONMENT_DEFAULTS"]

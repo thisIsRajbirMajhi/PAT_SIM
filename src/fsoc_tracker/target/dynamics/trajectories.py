@@ -15,24 +15,7 @@ import warnings
 
 import numpy as np
 
-TRAJECTORY_TYPES = (
-    "straight", "circular", "figure_eight", "random",
-    "spiral", "sinusoidal", "user-defined",
-)
-
-_TRAJECTORY_ALIASES = {
-    "figure-eight": "figure_eight",
-    "figure_8": "figure_eight",
-    "figure-8": "figure_eight",
-    "figure8": "figure_eight",
-    "figure_of_8": "figure_eight",
-    "user_defined": "user-defined",
-}
-
-
-def normalize_trajectory_type(raw):
-    t = str(raw or "straight").strip().lower().replace(" ", "_")
-    return _TRAJECTORY_ALIASES.get(t, t)
+from pat_common.kinds import TRAJECTORY_TYPES, normalize_trajectory_type
 
 
 def _random_init(rng, ws):

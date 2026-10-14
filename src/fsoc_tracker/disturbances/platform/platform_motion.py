@@ -18,21 +18,11 @@ import math
 
 import numpy as np
 
-FIGURE_8_ALIASES = frozenset({
-    "figure_of_8", "figure_8", "figure-of-8", "figure-of_8",
-    "figure8", "figure-8", "figure_of-8", "eight",
-})
+from pat_common.kinds import FIGURE_8_ALIASES, normalize_platform_type
 
 LINEAR_WANDER = 600.0
 RANDOM_WANDER = 500.0
 MAX_DELTA = 20.0
-
-
-def normalize_platform_type(raw):
-    t = str(raw or "none").strip().lower().replace(" ", "_")
-    if t in FIGURE_8_ALIASES:
-        return "figure_of_8"
-    return t
 
 
 class PlatformMotion:

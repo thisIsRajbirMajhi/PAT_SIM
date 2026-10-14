@@ -4,7 +4,7 @@ Single source of truth remains fsoc_tracker.config.defaults:DEFAULT_CONFIG
 (shared dependency, deliberately not copied). Re-exported here for
 discoverability and standalone use.
 """
-from fsoc_tracker.config.defaults import DEFAULT_CONFIG
+from pat_common.config.defaults import DEFAULT_CONFIG
 
 DETECTOR_DEFAULTS = DEFAULT_CONFIG["detector"]
 TRACKER_DEFAULTS = DEFAULT_CONFIG["tracker"]

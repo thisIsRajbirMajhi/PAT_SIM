@@ -1,5 +1,4 @@
-WORLD_DEFAULTS = {
-    "width": 2000,  # Screen Size 2000x2000, optional 1000-4000
-    "height": 2000,
-    "background": 18,  # 0-60
-}
+"""Legacy compatibility: canonical implementation lives in pat_common.config.sections."""
+from pat_common.config.sections.world import WORLD_DEFAULTS
+
+__all__ = ["WORLD_DEFAULTS"]
