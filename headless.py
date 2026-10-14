@@ -34,11 +34,9 @@ import yaml
 
 from fsoc_tracker.config.loader import load_config
 from fsoc_tracker.input.synthetic_source import SyntheticSource
-from fsoc_tracker.pipeline import BeaconDetector, Tracker
-from fsoc_tracker.camera import CameraController
+from pat_pipeline import DisplayStatus, DisplayTracker, make_pipeline
 from fsoc_tracker.evaluation.metrics import MetricsCollector
 from fsoc_tracker.evaluation.auto_logger import RobustPerfLogger
-from fsoc_tracker.pipeline.track.display import DisplayTracker, DisplayStatus
 
 # --------------------------------------------------------------------------
 # Extreme scenario definitions live in the shared package module so the GUI
@@ -202,9 +200,10 @@ def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
         no_cue = True  # cue is synthetic-only; video has no gimbal to cue
     else:
         source = SyntheticSource(cfg, seed=seed)
-    detector = BeaconDetector(cfg)
-    tracker = Tracker(cfg)
-    controller = CameraController(cfg)
+    # Canonical pipeline: exactly one detector + tracker + controller,
+    # owned by the SearchTrackPipeline (no separate constructions).
+    pipe = make_pipeline(cfg)
+    controller = pipe.controller
     metrics = MetricsCollector()
     metrics.input_fps = float(getattr(source, "fps", cfg["camera"]["fps"]))
     logger = RobustPerfLogger(base_dir="outputs/runs", metrics_collector=metrics) \
@@ -214,8 +213,7 @@ def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
     metrics.start_run()
     if logger is not None:
         logger.begin_run(cfg)
-    tracker.reset()
-    controller.reset()
+    pipe.reset()
     source.reset()
     if not no_cue and hasattr(source, "cue_camera_to_target"):
         source.cue_camera_to_target()
@@ -224,11 +222,6 @@ def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
     fps = float(cfg["camera"]["fps"])
     upd = float(cfg["camera"].get("update_interval_hz", fps))
     dt_ctrl = 1.0 / max(upd, 1)
-    if upd >= fps:
-        every_ctrl = 1
-    else:
-        every_ctrl = max(1, int(round(fps / upd)))
-    _last_cmd = None
     fps_smooth = float(getattr(source, "fps", fps))
     last_t = time.perf_counter()
     last_state = last_tele = None
@@ -237,99 +230,46 @@ def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
     sm_states = set()
     locked_flags = []
     t0 = time.perf_counter()
-    _latched = False
-    from fsoc_tracker.target.dynamics.visibility import is_blink_off as _blink_off, is_hidden as _hidden
 
     for i in range(frames):
         f0 = time.perf_counter()
         frame, gt = source.read()
         if frame is None:
             break
-        pred = tracker.get_predicted_pixel() if hasattr(tracker, "get_predicted_pixel") else None
-        try:
-            _miss0 = int(getattr(getattr(tracker, "sm", None), "missed", 0))
-        except Exception:
-            _miss0 = 0
-        try:
-            _fresh = bool(_latched) and _miss0 <= 30
-            _gate = tracker.get_gate_radius_px(missed=_miss0) if (hasattr(tracker, "get_gate_radius_px") and _fresh) else None
-        except Exception:
-            _gate = None
-        try:
-            detection = detector.detect(frame.image, predicted_pos=pred, gate_radius_px=_gate)
-        except TypeError:
-            detection = detector.detect(frame.image, predicted_pos=pred)
-        try:
-            _hold_sched = bool(_blink_off(frame.frame_id, cfg) or _hidden(frame.frame_id, cfg))
-        except Exception:
-            _hold_sched = False
-        try:
-            _ego = (float(getattr(controller, "prev_pan_rate", 0.0)),
-                    float(getattr(controller, "prev_tilt_rate", 0.0)))
-        except Exception:
-            _ego = (0.0, 0.0)
-        try:
-            estimate = tracker.step(detection, frame, hold=False, ego_rate=_ego)
-        except TypeError:
-            estimate = tracker.step(detection, frame)
-        try:
-            if getattr(estimate.tracking_state, "value", "") == "LOCKED":
-                _latched = True
-        except Exception:
-            pass
-        try:
-            if hasattr(source, "camera"):
-                _in_fov_pre = source.camera.world_to_image(gt.world_pos) is not None \
-                    if gt is not None and getattr(gt, "world_pos", None) not in (None, (0, 0)) else None
-            else:
-                _in_fov_pre = True if detection.valid else None
-        except Exception:
-            _in_fov_pre = None
-        try:
-            if hasattr(source, "camera"):
-                _lim_pre = bool(source.camera.is_at_limit(
-                    getattr(controller, "prev_pan_rate", 0.0),
-                    getattr(controller, "prev_tilt_rate", 0.0)))
-            else:
-                _lim_pre = False
-        except Exception:
-            _lim_pre = False
-        try:
-            _sm_pre = getattr(tracker, "sm", None)
-            _miss_pre = int(getattr(_sm_pre, "missed", 0))
-            _cctx = {
-                "missed": _miss_pre,
-                "cand_frames": int(getattr(_sm_pre, "candidate_frames", 0)),
-                "locked_frames": int(getattr(_sm_pre, "locked_frames", 0)),
-                "det_valid": bool(detection.valid),
-                "det_conf": float(detection.confidence or 0.0),
-                "in_fov": _in_fov_pre,
-                "latched": bool(_latched and _miss_pre <= 60),
-                "scheduled_hold": _hold_sched,
-                "saturated": False,
-                "at_limit": _lim_pre,
-                "ego_rate": max(abs(float(_ego[0])), abs(float(_ego[1]))),
-            }
-        except Exception:
-            _cctx = None
-        # Sr.15 control-rate hold (sensor fps vs gimbal update_interval_hz)
-        if (i % every_ctrl) == 0 or _last_cmd is None:
-            try:
-                cmd = controller.step(estimate, dt=dt_ctrl, ctx=_cctx)
-            except TypeError:
-                cmd = controller.step(estimate, dt=dt_ctrl)
-            _last_cmd = cmd
-        else:
-            cmd = _last_cmd
-
+        # Host-side camera context from pre-move geometry (matches the frame
+        # pixels). Video sources have no gimbal: in_fov follows detection.
         try:
             if hasattr(source, "camera"):
                 _in_fov = source.camera.world_to_image(gt.world_pos) is not None \
                     if gt is not None and getattr(gt, "world_pos", None) not in (None, (0, 0)) else None
             else:
-                _in_fov = True if detection.valid else None
+                _in_fov = None
         except Exception:
             _in_fov = None
+        try:
+            if hasattr(source, "camera"):
+                _at_lim = bool(source.camera.is_at_limit(
+                    getattr(controller, "prev_pan_rate", 0.0),
+                    getattr(controller, "prev_tilt_rate", 0.0)))
+            else:
+                _at_lim = False
+        except Exception:
+            _at_lim = False
+        try:
+            _ego = (float(getattr(controller, "prev_pan_rate", 0.0)),
+                    float(getattr(controller, "prev_tilt_rate", 0.0)))
+        except Exception:
+            _ego = (0.0, 0.0)
+        # Canonical per-frame chain (predict -> gate -> detect -> estimate ->
+        # state -> control, command held between control ticks internally).
+        # Ground truth is NOT passed: the pipeline decides from pixels alone.
+        detection, estimate, cmd = pipe.step_frame(
+            frame, dt=dt_ctrl, in_fov=_in_fov, at_limit=_at_lim, ego_rate=_ego)
+        if _in_fov is None:
+            try:
+                _in_fov = True if detection.valid else None
+            except Exception:
+                pass
         is_ptz = getattr(source, "is_ptz_enabled", not is_video)
         if is_ptz:
             source.apply_camera_command(cmd.pan_rate, cmd.tilt_rate, dt_ctrl)
@@ -360,7 +300,7 @@ def run_single(cfg, frames, seed=42, every=30, live=False, no_cue=False,
                            search_case=getattr(cmd, "search_case", ""))
 
         try:
-            sm = getattr(tracker, "sm", None)
+            sm = getattr(pipe.tracker, "sm", None)
             last_state, last_tele = display.update(
                 getattr(frame, "frame_id", 0), float(frame.timestamp),
                 bool(detection.valid), float(detection.confidence or 0.0),
