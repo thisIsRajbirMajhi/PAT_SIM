@@ -1,7 +1,7 @@
-"""Optuna tuning harness: search space + composite objective (pure functions).
+"""Optuna tuning harness: search space + composite objective + study loop.
 
-No Optuna study loop here (Task 3), no headless imports at module import
-time — headless is imported lazily inside functions so unit tests stay fast.
+No Optuna/headless imports at module import time — both are imported
+lazily inside functions so unit tests stay fast.
 """
 
 # SEARCH_SPACE: key -> spec. Each spec has section (config subtree), kind,
@@ -139,3 +139,140 @@ def composite_loss(results):
     from headless import BENCHMARKS
 
     return float(sum(_case_loss(r, BENCHMARKS) for r in results))
+
+
+# Fast tuning subset: X1..X14 @ seed 42 (14) + E4,E5,E13,E15,E20 @ 42 (5).
+FAST_SUBSET = (
+    [(f"X{i}", 42) for i in range(1, 15)]
+    + [(k, 42) for k in ("E4", "E5", "E13", "E15", "E20")]
+)
+
+# Camera start keys applied AFTER the base build (post far-start), same
+# split as Task 1 (`headless._CAMERA_START_KEYS`).
+_CAMERA_START_KEYS = ("initial_position", "initial_pan", "initial_tilt")
+
+
+def _split_local_overrides(overrides):
+    """Split trial overrides into (pre, post) batches.
+
+    `post` holds the camera start keys merged after the base case config
+    (so they survive `enforce_far_start`); `pre` holds everything else.
+    """
+    overrides = overrides or {}
+    pre = {}
+    post = {}
+    for section, kv in overrides.items():
+        if not isinstance(kv, dict):
+            pre[section] = kv
+            continue
+        if section == "camera":
+            pre_cam = {k: v for k, v in kv.items() if k not in _CAMERA_START_KEYS}
+            post_cam = {k: v for k, v in kv.items() if k in _CAMERA_START_KEYS}
+            if pre_cam:
+                pre[section] = pre_cam
+            if post_cam:
+                post[section] = post_cam
+        else:
+            pre[section] = kv
+    return pre, post
+
+
+def evaluate_subset(overrides, subset=None, timeout_s=300.0):
+    """Run one candidate's overrides over a case subset, sequentially.
+
+    Builds each base config via `build_case_config`/`build_edge_config`
+    with the `headless.WINNER_OVERRIDES` global cleared (worker-safety —
+    never rely on the global inside trials), then `deep_merge`s the trial's
+    non-camera-start overrides, then the camera start keys last so tuned
+    starts survive far-start enforcement. Target stays far-corner.
+
+    Each returned dict carries `verdict`, `lock_pct`, `rmse`,
+    `first_lock`, `losses`, `bkey`, `intermittent`, `acq`, `valid_pct`
+    for `composite_loss`. Per-case timeout passes straight into
+    `run_tracking_case(..., timeout_s=...)`; timeout ERRORs score via
+    `composite_loss` with no special handling.
+    """
+    import copy
+
+    import headless
+    from pat_common.config.loader import deep_merge
+
+    subset = list(subset) if subset is not None else list(FAST_SUBSET)
+    pre, post = _split_local_overrides(overrides)
+    x_by_key = {d["key"]: d for d in headless.X_DEFS}
+    e_by_key = {d["key"]: d for d in headless.E_DEFS}
+
+    results = []
+    for key, seed in subset:
+        saved = copy.deepcopy(headless.WINNER_OVERRIDES)
+        try:
+            headless.WINNER_OVERRIDES = {}
+            if key in x_by_key:
+                case_def = x_by_key[key]
+                cfg = headless.build_case_config(case_def, seed)
+            elif key in e_by_key:
+                case_def = e_by_key[key]
+                cfg = headless.build_edge_config(case_def, seed)
+            else:  # pragma: no cover - defensive
+                raise ValueError(f"unknown subset key {key!r}")
+        finally:
+            headless.WINNER_OVERRIDES = saved
+        if pre:
+            cfg = deep_merge(cfg, copy.deepcopy(pre))
+        if post:
+            cfg = deep_merge(cfg, copy.deepcopy(post))
+        r = headless.run_tracking_case(
+            f"{case_def['key']}-s{seed}", case_def["name"], case_def["desc"],
+            cfg, case_def["frames"], seed, case_def["intermittent"],
+            bkey=case_def["key"], timeout_s=timeout_s,
+        )
+        r["intermittent"] = bool(case_def["intermittent"])
+        results.append(r)
+    return results
+
+
+def run_study(trials=20, workers=1, study_name="tune",
+              storage="sqlite:///runs/tune.db", timeout_s=300.0, stage=None):
+    """Run an Optuna study over FAST_SUBSET and return the study.
+
+    TPESampler + MedianPruner(n_startup_trials=10); RDB storage so rounds
+    resume (`load_if_exists=True`; `runs/` created when the default
+    sqlite path is used). Cases run sequentially in-process per trial;
+    `workers` is accepted and validated (>=1) for forward-compat with
+    Task 4 validation batching.
+    """
+    import os
+
+    import optuna
+
+    workers = int(workers)
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    subset = list(FAST_SUBSET)
+
+    def objective(trial):
+        overrides = suggest_overrides(trial, stage)
+        results = evaluate_subset(overrides, subset, timeout_s)
+        return composite_loss(results)
+
+    sampler = optuna.samplers.TPESampler()
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=10)
+    if storage is None:
+        return _optimize(optuna, None, study_name, sampler, pruner,
+                         objective, trials)
+    if isinstance(storage, str) and storage.startswith("sqlite:///"):
+        db_path = storage[len("sqlite:///"):]
+        if db_path and db_path != ":memory:":
+            parent = os.path.dirname(os.path.abspath(db_path))
+            os.makedirs(parent, exist_ok=True)
+    return _optimize(optuna, storage, study_name, sampler, pruner,
+                     objective, trials)
+
+
+def _optimize(optuna, storage, study_name, sampler, pruner, objective, trials):
+    study = optuna.create_study(
+        direction="minimize", sampler=sampler, pruner=pruner,
+        study_name=study_name, storage=storage, load_if_exists=True,
+    )
+    study.optimize(objective, n_trials=trials)
+    return study
