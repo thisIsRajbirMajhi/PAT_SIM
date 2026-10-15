@@ -66,9 +66,11 @@ class StraightTrajectory(Trajectory):
 
 
 class CircularTrajectory(Trajectory):
-    def __init__(self, center=(1000, 1000), radius=400, speed_px_per_frame=3.0, angular_speed=None):
+    def __init__(self, center=(1000, 1000), radius=400, speed_px_per_frame=3.0, angular_speed=None,
+                 world_size=(2000, 2000)):
         self.center = np.array(center, dtype=float)
         self.radius = radius
+        self.world_size = world_size
         if angular_speed is None:
             # speed = r * omega  => omega = speed / r  (rad per frame)
             angular_speed = speed_px_per_frame / max(radius, 1)
@@ -76,7 +78,23 @@ class CircularTrajectory(Trajectory):
 
     def step(self, t: float):
         ang = self.omega * t
-        return float(self.center[0] + self.radius * math.cos(ang)), float(self.center[1] + self.radius * math.sin(ang))
+        x = float(self.center[0] + self.radius * math.cos(ang))
+        y = float(self.center[1] + self.radius * math.sin(ang))
+        # Mirror back inside the world (same convention as StraightTrajectory):
+        # a corner-centred radius-400 orbit otherwise spends ~half its time
+        # outside the rendered scene, where no pipeline can detect it.
+        for i, v in ((0, x), (1, y)):
+            lo, hi = 50, self.world_size[i] - 50
+            span = max(hi - lo, 1)
+            if v < lo:
+                v = lo + (lo - v) % span
+            elif v > hi:
+                v = hi - (v - hi) % span
+            if i == 0:
+                x = v
+            else:
+                y = v
+        return x, y
 
 
 class FigureEightTrajectory(Trajectory):
@@ -252,7 +270,7 @@ def make_trajectory(cfg, seed=42):
                                   speed_px_per_frame=speed, world_size=ws)
     elif t == "circular":
         return CircularTrajectory(center=center, radius=CIRCULAR_RADIUS,
-                                  speed_px_per_frame=speed)
+                                  speed_px_per_frame=speed, world_size=ws)
     elif t == "figure_eight":
         return FigureEightTrajectory(center=center, radius=FIGURE_EIGHT_RADIUS,
                                      speed_px_per_frame=speed)

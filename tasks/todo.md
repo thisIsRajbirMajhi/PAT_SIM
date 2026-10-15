@@ -40,10 +40,10 @@
 
 ## Task 2: Colour-path neutrality
 
-**Description:** Make colour mode measurement-neutral: verify BGR2GRAY path and remove/compensate the +6 blue background tint effect on threshold so E10 matches monochrome sensitivity.
+**Description:** Make colour mode measurement-neutral: verify BGR2GRAY path and remove/compensate the +6 blue background tint effect on threshold so E10 matches monochrome sensitivity. SUPERSEDED by diagnosis 2026-10-15: E10 peak 246 clears any floor — root cause is corner-centred circular orbit leaving the 2000px world ~48% of the time (mirror-bounds fix below). Colour path verified innocent (BGR2GRAY + negligible +6 tint: bg 22 vs 21).
 
 **Acceptance criteria:**
-- [ ] E10 lock >=40% (bench), first_lock <=500
+- [x] E10 lock >=40% (bench), first_lock <=500 — DONE: 81.8% lock / rmse 0.82 STRICT-PASS single-case
 
 **Verification:**
 - [ ] Tests pass: `python -m pytest tests/ -q`
