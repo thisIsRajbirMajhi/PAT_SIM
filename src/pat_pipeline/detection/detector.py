@@ -30,6 +30,7 @@ class BeaconDetector:
         else:
             img = frame_gray
         # preprocess: small gaussian blur
+        raw_max = float(np.max(img))
         if self.blur >= 3:
             k = self.blur if self.blur % 2 == 1 else self.blur + 1
             img = cv2.GaussianBlur(img, (k, k), 0)
@@ -40,8 +41,13 @@ class BeaconDetector:
         noise = float(np.std(img)) + 1e-6
         # also consider percentile 98
         p98 = float(np.percentile(img, 98))
-        thresh_val = max(bg + self.k * noise, p98 - 8, 120)  # clamp low bound
-        thresh_val = float(np.clip(thresh_val, 80, 230))
+        # Dim-scene floor: blur attenuates a small dim beacon (raw 140 ->
+        # ~84 after 3x3 blur) below the fixed 120 floor, so frames with
+        # nothing brighter than 200 raw use a lower floor. Bright frames
+        # keep the exact old behavior (floor 120).
+        floor = 120.0 if raw_max > 200 else 70.0
+        thresh_val = max(bg + self.k * noise, p98 - 8, floor)  # clamp low bound
+        thresh_val = float(np.clip(thresh_val, 60, 230))
 
         _, binary = cv2.threshold(img, thresh_val, 255, cv2.THRESH_BINARY)
 
