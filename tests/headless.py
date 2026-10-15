@@ -13,6 +13,7 @@ Usage:
     python.exe headless.py --extreme --workers 4-8
     python.exe headless.py --extreme --workers 4 --timeout 600 --> For slower machines
 """
+from __future__ import annotations
 
 import argparse
 import concurrent.futures
@@ -28,7 +29,13 @@ import time
 import traceback
 import headless_report as R
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+# --- repo-root anchoring (P1-2) --------------------------------------------
+# All runs/ artifacts are written here regardless of CWD.
+_HERE = os.path.dirname(os.path.abspath(__file__))       # tests/
+_REPO_ROOT = os.path.dirname(_HERE)                      # repo root
+RUNS_DIR = os.path.join(_REPO_ROOT, "runs")
+sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
+# ---------------------------------------------------------------------------
 
 import numpy as np
 
@@ -37,11 +44,6 @@ from pat_common.config.loader import deep_merge
 
 FAR_CORNERS = [[300, 300], [1700, 300], [300, 1700], [1700, 1700]]
 FULL_SEEDS = (42, 7, 99)
-
-ALL_TAGS = ("noise", "motion", "atmosphere", "sensor", "clutter",
-            "control", "detection", "throughput", "ambiguity",
-            "determinism", "robustness")
-ALL_SEVERITIES = ("CORE", "HARD", "EXTREME", "EXPECTED-HARD")
 
 # ---------------------------------------------------------------------------
 # X family definitions: key, scenario name, corner index, frames, star,
@@ -447,11 +449,13 @@ def _safe_float(v, default=0.0):
 
 
 def _compute_in_fov(source, gt):
-    """Robust in-FOV flag.
+    """Robust in-FOV flag. (SC-1)
 
     Handles NumPy arrays / lists for `gt.world_pos` without triggering the
-    ambiguous-truth-value error inside `... not in (None, (0, 0))`. Returns
-    None when `gt` or `world_pos` is missing/zero, or the projection fails.
+    "truth value of an array is ambiguous" error that `... not in (None, (0,0))`
+    silently swallowed — which previously caused `in_fov` to be None for
+    every numpy-based ground truth. Returns None when `gt` or `world_pos` is
+    missing/zero, or the projection fails.
     """
     if gt is None:
         return None
@@ -1117,7 +1121,6 @@ def run_robustness(rkey, seed):
                     if d is None:
                         ok = False
                 except Exception:
-                    # explicit exception is acceptable as long as it's controlled
                     pass
             return _empty_result("R11", seed,
                                  "STRICT-PASS" if ok else "FAIL",
@@ -1137,18 +1140,15 @@ def run_robustness(rkey, seed):
             src = SyntheticSource(cfg, seed=seed)
             pipe = make_pipeline(cfg)
             pipe.reset()
-            # Warm up
             for _ in range(30):
                 frame, _ = src.read()
                 pipe.step_frame(frame)
-            # reset and run 30 more
             pipe.reset()
             first_after_reset = []
             for _ in range(30):
                 frame, _ = src.read()
                 d, _e, _c = pipe.step_frame(frame)
                 first_after_reset.append(bool(getattr(d, "valid", False)))
-            # reset again, run again — result should be identical
             pipe.reset()
             second_after_reset = []
             for _ in range(30):
@@ -1386,6 +1386,8 @@ def main():
     ap.add_argument("--color", choices=["auto", "always", "never"], default="auto")
     ap.add_argument("--no-html", action="store_true", help="skip HTML report")
     ap.add_argument("--no-diff", action="store_true", help="skip regression diff")
+    ap.add_argument("--no-progress", action="store_true",
+                    help="disable live progress bar (P2-2)")
     args = ap.parse_args()
     R.set_color_mode("never" if args.no_color else args.color)
     try:
@@ -1421,7 +1423,7 @@ def main():
     elif args.fuzz:
         specs = build_suite(args.seed, args.fuzz, None, args.frames, tags, severities)
     else:
-        # --extreme / --gauntlet / --full / default: full suite
+        # --extreme / --gauntlet / --full / no-arg: full suite
         specs = build_suite(args.seed, 0, None, args.frames, tags, severities)
 
     for s in specs:
@@ -1435,10 +1437,14 @@ def main():
         return 0
 
     print(f"Suite: {len(specs)} cases | tags={tags or 'ALL'} | severity={severities or 'ALL'}")
+    print(f"Runs dir: {RUNS_DIR}")
 
     results = []
     t0 = time.perf_counter()
     per_case_times = []
+    # Live progress bar (P2-2). Falls back to no-op when colours are
+    # disabled (piped output / --no-color / --no-progress).
+    prog = R.Progress(len(specs), enabled=(not args.no_progress and args.workers == 1))
     if args.workers and args.workers > 1:
         with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as ex:
             for i, r in enumerate(ex.map(_worker, specs), 1):
@@ -1505,6 +1511,7 @@ def main():
                     if r["verdict"] != "ERROR":
                         break
             results.append(r)
+            prog.update(i, r)
             eta = ((time.perf_counter() - t0) / i) * (len(specs) - i) if i else 0
             print(f'[{i}/{len(specs)}] [{r["case"]}] {r["verdict"]} '
                   f'(bench: {r.get("benchmark", "")}) lock={r["lock_pct"]}% '
@@ -1523,14 +1530,14 @@ def main():
     final = ("FINAL VERDICT: PASS - all benchmarks beaten" if (fl == 0 and er == 0)
              else f"FINAL VERDICT: FAIL - {fl + er} case(s) below benchmark")
 
-    os.makedirs("runs", exist_ok=True)
+    os.makedirs(RUNS_DIR, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    auto_json = os.path.join("runs", f"headless_{stamp}.json")
-    auto_md   = os.path.join("runs", f"headless_{stamp}.md")
+    auto_json = os.path.join(RUNS_DIR, f"headless_{stamp}.json")
+    auto_md   = os.path.join(RUNS_DIR, f"headless_{stamp}.md")
 
     prev_payload, prev_path = (None, None)
     if not args.no_diff:
-        prev_payload, prev_path = R.load_previous_run("runs")
+        prev_payload, prev_path = R.load_previous_run(RUNS_DIR)
 
     payload = {
         "results": results,
@@ -1540,6 +1547,10 @@ def main():
                     "wall_s": round(dt, 1), "stamp": stamp,
                     "tags_filter": tags, "severity_filter": severities},
     }
+    # SC-2: allow_nan=False makes any lingering NaN/Inf fail loudly instead
+    # of silently emitting non-standard JSON tokens. On failure, remove the
+    # partial tmp file and continue — losing one JSON snapshot is preferable
+    # to aborting an otherwise successful run.
     tmp = auto_json + ".tmp"
     try:
         with open(tmp, "w") as f:
@@ -1553,7 +1564,7 @@ def main():
             pass
 
     # --- enriched report ---
-    R.report(results, family, payload["summary"], prev_payload, runs_dir="runs",
+    R.report(results, family, payload["summary"], prev_payload, runs_dir=RUNS_DIR,
              write_html=not args.no_html)
     if prev_path:
         print(R.c(f"Diffed against -> {prev_path}", R.C.DIM))
@@ -1581,7 +1592,7 @@ def main():
                     f'{r["verdict"]} | {r["reason"]} |\n')
     print(f"Logged run -> {auto_json} + {auto_md}")
 
-    hist = os.path.join("runs", "headless_log.csv")
+    hist = os.path.join(RUNS_DIR, "headless_log.csv")
     new_file = not os.path.exists(hist)
     with open(hist, "a", newline="") as f:
         w = csv.writer(f)
@@ -1598,7 +1609,7 @@ def main():
 
     try:
         keep = max(int(args.keep), 1)
-        snaps = sorted(glob.glob(os.path.join("runs", "headless_*.json")))
+        snaps = sorted(glob.glob(os.path.join(RUNS_DIR, "headless_*.json")))
         for old in snaps[:-keep]:
             try:
                 os.remove(old)

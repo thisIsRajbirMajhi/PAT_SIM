@@ -4,12 +4,22 @@ No Optuna/headless imports at module import time — both are imported
 lazily inside functions so unit tests stay fast.
 """
 
+from __future__ import annotations
+
 import argparse
 import copy
+import glob
 import json
 import math
 import os
 import time
+
+# --- repo-root anchoring (P1-2) --------------------------------------------
+# tune.db, tune_*_best.json, etc. always land in <repo>/runs regardless of CWD.
+_HERE = os.path.dirname(os.path.abspath(__file__))       # tests/
+_REPO_ROOT = os.path.dirname(_HERE)                      # repo root
+RUNS_DIR = os.path.join(_REPO_ROOT, "runs")
+# ---------------------------------------------------------------------------
 
 # SEARCH_SPACE: key -> spec. Each spec has section (config subtree), kind,
 # range info, and stage tag (1/2/3) per docs/Tuning.md section 4:
@@ -195,7 +205,8 @@ def _split_local_overrides(overrides):
     return pre, post
 
 
-def evaluate_subset(overrides, subset=None, timeout_s=300.0):
+def evaluate_subset(overrides, subset=None, timeout_s=300.0,
+                    frames_override=None):
     """Run one candidate's overrides over a case subset, sequentially.
 
     Builds each base config via `build_case_config`/`build_edge_config`
@@ -209,9 +220,11 @@ def evaluate_subset(overrides, subset=None, timeout_s=300.0):
     for `composite_loss`. Per-case timeout passes straight into
     `run_tracking_case(..., timeout_s=...)`; timeout ERRORs score via
     `composite_loss` with no special handling.
-    """
-    import copy
 
+    `frames_override` (P1-4) is a TEST-ONLY accelerator that replaces
+    each case's frame count during trial evaluation. Never use it for a
+    candidate you intend to accept — validation always uses real frames.
+    """
     import headless
     from pat_common.config.loader import deep_merge
 
@@ -252,9 +265,11 @@ def evaluate_subset(overrides, subset=None, timeout_s=300.0):
             cfg = deep_merge(cfg, copy.deepcopy(pre))
         if post:
             cfg = deep_merge(cfg, copy.deepcopy(post))
+        frames = (frames_override if frames_override is not None
+                  else case_def["frames"])
         r = headless.run_tracking_case(
             f"{case_def['key']}-s{seed}", case_def["name"], case_def["desc"],
-            cfg, case_def["frames"], seed, case_def["intermittent"],
+            cfg, frames, seed, case_def["intermittent"],
             bkey=case_def["key"], timeout_s=timeout_s,
         )
         r["intermittent"] = bool(case_def["intermittent"])
@@ -280,14 +295,15 @@ def _coerce_workers(workers):
 
 
 def run_study(trials=20, workers=1, study_name="tune",
-              storage="sqlite:///runs/tune.db", timeout_s=300.0, stage=None):
+              storage="sqlite:///runs/tune.db", timeout_s=300.0, stage=None,
+              frames_override=None):
     """Run an Optuna study over FAST_SUBSET and return the study.
 
     TPESampler + MedianPruner(n_startup_trials=10); RDB storage so rounds
-    resume (`load_if_exists=True`; `runs/` created when the default
-    sqlite path is used). Cases run sequentially in-process per trial;
-    `workers` is accepted and validated (>=1) for forward-compat with
-    Task 4 validation batching.
+    resume (`load_if_exists=True`; `runs/` is created automatically).
+    Cases run sequentially in-process per trial. `workers` is accepted
+    and validated (>=1) for forward-compat with validation batching — it
+    does NOT parallelize the study loop itself.
 
     Input validation happens BEFORE the lazy `import optuna` so argument
     errors surface even on machines without Optuna installed.
@@ -295,15 +311,14 @@ def run_study(trials=20, workers=1, study_name="tune",
     # Validate BEFORE importing the optional dependency.
     workers = _coerce_workers(workers)
 
-    import os
-
     import optuna
 
     subset = list(FAST_SUBSET)
 
     def objective(trial):
         overrides = suggest_overrides(trial, stage)
-        results = evaluate_subset(overrides, subset, timeout_s)
+        results = evaluate_subset(overrides, subset, timeout_s,
+                                  frames_override=frames_override)
         return composite_loss(results)
 
     sampler = optuna.samplers.TPESampler()
@@ -311,6 +326,10 @@ def run_study(trials=20, workers=1, study_name="tune",
     if storage is None:
         return _optimize(optuna, None, study_name, sampler, pruner,
                          objective, trials)
+    if isinstance(storage, str) and storage.startswith("sqlite:///runs/"):
+        # Anchor the default storage path to the repo root. (P1-2)
+        storage = "sqlite:///" + os.path.join(
+            RUNS_DIR, storage[len("sqlite:///runs/"):])
     if isinstance(storage, str) and storage.startswith("sqlite:///"):
         db_path = storage[len("sqlite:///"):]
         if db_path and db_path != ":memory:":
@@ -331,6 +350,7 @@ def _optimize(optuna, storage, study_name, sampler, pruner, objective, trials):
 
 # Stage schedule across auto-loop rounds (Tuning.md section 4):
 # round 0 core -> round 1 policy -> round 2+ joint polish (stage=None).
+# Can be overridden per-run with --stage (P0-1).
 STAGE_SCHEDULE = (1, 2, None)
 
 
@@ -345,6 +365,22 @@ def _write_json(path, payload):
         json.dump(payload, f, indent=2)
     os.replace(tmp, path)
     return path
+
+
+# Tune artifacts are never pruned by headless.py's --keep pass, so a long
+# tuning campaign can leave hundreds of tune_* files in runs/. This helper
+# is called at the end of validate_full(). (P2-3)
+def _prune_runs(keep=50):
+    pats = ("tune_*_best.json", "tune_*_round*.json",
+            "tune_*_validation.json")
+    for pat in pats:
+        snaps = sorted(glob.glob(os.path.join(RUNS_DIR, pat)),
+                       key=os.path.getmtime)
+        for old in snaps[:-keep]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
 
 
 def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
@@ -403,7 +439,7 @@ def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
     verdict = "PASS" if (fails == 0 and errors == 0) else "FAIL"
 
     stamp = stamp or _stamp()
-    report = os.path.join("runs", f"tune_{stamp}_validation.json")
+    report = os.path.join(RUNS_DIR, f"tune_{stamp}_validation.json")
     payload = {
         "winner": winner_path,
         "fails": fails,
@@ -413,6 +449,7 @@ def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
         "results": results,
     }
     _write_json(report, payload)
+    _prune_runs()  # (P2-3)
     return {"fails": fails, "errors": errors, "verdict": verdict,
             "report_paths": [report]}
 
@@ -444,7 +481,7 @@ def write_best_artifact(overrides, value, trial_number, round_idx, stage,
                               copy.deepcopy(overrides))
     except Exception:
         resolved = copy.deepcopy(overrides)
-    path = os.path.join("runs", f"tune_{stamp}_best.json")
+    path = os.path.join(RUNS_DIR, f"tune_{stamp}_best.json")
     _write_json(path, {
         "overrides": overrides,
         "resolved_config": resolved,
@@ -462,11 +499,23 @@ def main(argv=None):
                     help="process count for full validation of each candidate "
                          "(the study loop itself runs sequentially)")
     ap.add_argument("--study", default="tune")
-    ap.add_argument("--storage", default="sqlite:///runs/tune.db")
+    ap.add_argument("--storage", default="sqlite:///runs/tune.db",
+                    help="Optuna RDB storage URL. A 'sqlite:///runs/...' path "
+                         "is anchored to <repo_root>/runs regardless of CWD.")
     ap.add_argument("--subset", default="fast")
     ap.add_argument("--validate-topk", type=int, default=1)
     ap.add_argument("--max-rounds", type=int, default=3,
-                    help="study->validate rounds; 0 = unbounded")
+                    help="study->validate rounds; 0 = UNBOUNDED (loop only "
+                         "exits when a candidate passes the full suite)")
+    ap.add_argument("--stage", type=int, default=None, choices=[1, 2, 3],
+                    help="pin every round to one stage (1=core, 2=policy, "
+                         "3=joint polish). Default: STAGE_SCHEDULE across "
+                         "rounds (1 -> 2 -> None).")
+    ap.add_argument("--frames", type=int, default=None,
+                    help="TEST-ONLY accelerator: override frames used during "
+                         "trial evaluation. Validation still uses real frames. "
+                         "Never trust a winner found with a low value here "
+                         "until it re-passes without --frames.")
     ap.add_argument("--timeout", type=float, default=300.0,
                     help="per-case timeout in seconds")
     args = ap.parse_args(argv)
@@ -475,19 +524,32 @@ def main(argv=None):
         ap.error("--subset only supports 'fast'")
     if args.validate_topk < 1:
         ap.error("--validate-topk must be >= 1")
+    if args.max_rounds == 0:
+        print("WARNING: --max-rounds 0 is UNBOUNDED. The loop will only exit "
+              "when a candidate passes the full 80-case suite with 0 FAIL and "
+              "0 ERROR. Expected-hard cases may prevent that from ever "
+              "happening; interrupt with Ctrl-C (the SQLite study resumes).")
+    if args.frames is not None:
+        print(f"WARNING: --frames {args.frames} overrides trial frame counts. "
+              f"Any winner found this way MUST be re-validated at real frames "
+              f"before acceptance.")
 
     round_idx = 0
     while True:
         if args.max_rounds and round_idx >= args.max_rounds:
             print(f"STOP: {args.max_rounds} round(s) exhausted without green.")
             return 1
-        stage = (STAGE_SCHEDULE[round_idx]
-                 if round_idx < len(STAGE_SCHEDULE) else None)
+        if args.stage is not None:
+            stage = None if args.stage == 3 else args.stage
+        else:
+            stage = (STAGE_SCHEDULE[round_idx]
+                     if round_idx < len(STAGE_SCHEDULE) else None)
         print(f"=== round {round_idx} stage={stage} "
               f"trials={args.trials} ===")
         study = run_study(trials=args.trials, workers=args.workers,
                           study_name=args.study, storage=args.storage,
-                          timeout_s=args.timeout, stage=stage)
+                          timeout_s=args.timeout, stage=stage,
+                          frames_override=args.frames)
         scored = [t for t in study.trials if t.value is not None]
         scored.sort(key=lambda t: t.value)
         top = scored[:args.validate_topk]
@@ -498,8 +560,9 @@ def main(argv=None):
             overrides = _nest_params(trial.params)
             stamp = _stamp()
             winner_path = os.path.join(
-                "runs", f"tune_{stamp}_round{round_idx}_top{rank}.json")
+                RUNS_DIR, f"tune_{stamp}_round{round_idx}_top{rank}.json")
             _write_json(winner_path, overrides)
+            # Validation always uses real frames — never --frames here.
             rep = validate_full(winner_path, workers=args.workers,
                                 timeout_s=args.timeout, stamp=stamp)
             best_path = write_best_artifact(

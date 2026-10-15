@@ -2,12 +2,9 @@
 
 Adds ANSI colors, progress bar, TL;DR, breakdowns, leaderboards,
 failure buckets, regression diff, repro scripts, and an HTML report.
-
-Wire-up: see the 3-line patch to headless.py at the bottom of this file.
 """
 import json
 import os
-import shutil
 import sys
 import time
 from collections import Counter, defaultdict
@@ -46,6 +43,8 @@ def _color_enabled() -> bool:
         return False
     if _COLOR_MODE == "always":
         return True
+    # Defensive: sys.stdout may be detached / None in some IDE consoles
+    # and pytest capture contexts; isatty() then raises.
     try:
         return bool(sys.stdout and sys.stdout.isatty())
     except Exception:
@@ -224,6 +223,8 @@ def print_leaderboards(results, n=5):
     top = sorted(tracking, key=lambda r: r.get("lock_pct", 0), reverse=True)[:n]
     bot = sorted(tracking, key=lambda r: r.get("lock_pct", 0))[:n]
 
+    # NOTE: split the nested f-string to keep this valid on Python < 3.12,
+    # where re-using the same quote type inside an f-string is a SyntaxError.
     def row(r, col):
         lock_str = c(f"{r['lock_pct']:>5.1f}%", col)
         return (f'  {r["case"]:<14} lock {lock_str}  '
@@ -329,7 +330,7 @@ def print_regression_diff(prev_payload, results):
 
 
 # ---------------------------------------------------------------------------
-# Repro scripts
+# Repro scripts (P1-3): anchored to repo root, use sys.executable.
 # ---------------------------------------------------------------------------
 def write_repro_scripts(results, stamp, runs_dir="runs"):
     fails = [r for r in results if r["verdict"] in ("FAIL", "ERROR")]
@@ -337,15 +338,25 @@ def write_repro_scripts(results, stamp, runs_dir="runs"):
         return None, None
     sh_path = os.path.join(runs_dir, f"repro_{stamp}.sh")
     ps_path = os.path.join(runs_dir, f"repro_{stamp}.ps1")
+
+    # Interpreter that produced this run — avoids guessing "python" vs
+    # "python3" vs a venv shim. Forward slashes keep the bash script portable.
+    py = sys.executable.replace("\\", "/")
+
     sh = ["#!/usr/bin/env bash",
           "# Auto-generated. Reruns only failing cases.",
-          "set -u"]
-    ps = ["# Auto-generated. Reruns only failing cases."]
+          "set -u",
+          '# cd to the repo root regardless of where the script is invoked from.',
+          'cd "$(dirname "$0")/.." || exit 1',
+          ""]
+    ps = ["# Auto-generated. Reruns only failing cases.",
+          "# cd to the repo root regardless of where the script is invoked from.",
+          'Set-Location (Join-Path $PSScriptRoot "..")',
+          ""]
     for r in fails:
         key = r.get("bkey") or r["case"].split("-")[0]
         sd  = r["seed"]
-        # try scenario-name lookup; fall back to key (works for X/E/R)
-        cmd = f"python tests/headless.py --scenario {key} --seed {sd}"
+        cmd = f'"{py}" tests/headless.py --scenario {key} --seed {sd}'
         sh.append(f'echo "== {r["case"]} =="; {cmd} || true')
         ps.append(f'Write-Host "== {r["case"]} =="; {cmd}')
     with open(sh_path, "w") as f:
@@ -353,7 +364,7 @@ def write_repro_scripts(results, stamp, runs_dir="runs"):
     try:
         os.chmod(sh_path, 0o755)
     except OSError:
-        # e.g. Windows / non-POSIX filesystems — chmod is a nicety, not required.
+        # Windows / non-POSIX filesystems: chmod is cosmetic.
         pass
     with open(ps_path, "w") as f:
         f.write("\n".join(ps) + "\n")
