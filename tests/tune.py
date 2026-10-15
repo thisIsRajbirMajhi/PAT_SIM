@@ -288,12 +288,17 @@ def run_study(trials=20, workers=1, study_name="tune",
     sqlite path is used). Cases run sequentially in-process per trial;
     `workers` is accepted and validated (>=1) for forward-compat with
     Task 4 validation batching.
+
+    Input validation happens BEFORE the lazy `import optuna` so argument
+    errors surface even on machines without Optuna installed.
     """
+    # Validate BEFORE importing the optional dependency.
+    workers = _coerce_workers(workers)
+
     import os
 
     import optuna
 
-    workers = _coerce_workers(workers)
     subset = list(FAST_SUBSET)
 
     def objective(trial):
@@ -413,11 +418,17 @@ def validate_full(winner_path: str, workers: int = 1, timeout_s: float = 300.0,
 
 
 def _nest_params(params):
-    """Nest flat trial params into {section: {key: value}} overrides."""
+    """Nest flat trial params into {section: {key: value}} overrides.
+
+    Raises ValueError on any key not present in SEARCH_SPACE — silent
+    fallback to `controller` masked misconfigurations in the past.
+    """
     nested = {}
     for key, value in params.items():
-        section = SEARCH_SPACE.get(key, {}).get("section", "controller")
-        nested.setdefault(section, {})[key] = value
+        spec = SEARCH_SPACE.get(key)
+        if spec is None:
+            raise ValueError(f"trial parameter {key!r} is not in SEARCH_SPACE")
+        nested.setdefault(spec["section"], {})[key] = value
     return nested
 
 

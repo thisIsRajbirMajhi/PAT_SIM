@@ -46,7 +46,10 @@ def _color_enabled() -> bool:
         return False
     if _COLOR_MODE == "always":
         return True
-    return sys.stdout.isatty()
+    try:
+        return bool(sys.stdout and sys.stdout.isatty())
+    except Exception:
+        return False
 
 def c(text, *codes) -> str:
     s = _fold_console(str(text))
@@ -220,10 +223,13 @@ def print_leaderboards(results, n=5):
     print(c("=== Leaderboards ===", C.BOLD, C.B_CYAN))
     top = sorted(tracking, key=lambda r: r.get("lock_pct", 0), reverse=True)[:n]
     bot = sorted(tracking, key=lambda r: r.get("lock_pct", 0))[:n]
+
     def row(r, col):
-        return (f'  {r["case"]:<14} lock {c(f"{r["lock_pct"]:>5.1f}%", col)}  '
+        lock_str = c(f"{r['lock_pct']:>5.1f}%", col)
+        return (f'  {r["case"]:<14} lock {lock_str}  '
                 f'rmse {r["rmse"]:>5.2f}  p95 {r["p95"]:>5.2f}  '
                 f'1st {str(r["first_lock"]):>5}')
+
     print(c(f"TOP {n} (best lock%):", C.B_GREEN))
     for r in top:
         print(row(r, C.B_GREEN))
@@ -344,7 +350,11 @@ def write_repro_scripts(results, stamp, runs_dir="runs"):
         ps.append(f'Write-Host "== {r["case"]} =="; {cmd}')
     with open(sh_path, "w") as f:
         f.write("\n".join(sh) + "\n")
-    os.chmod(sh_path, 0o755)
+    try:
+        os.chmod(sh_path, 0o755)
+    except OSError:
+        # e.g. Windows / non-POSIX filesystems — chmod is a nicety, not required.
+        pass
     with open(ps_path, "w") as f:
         f.write("\n".join(ps) + "\n")
     return sh_path, ps_path

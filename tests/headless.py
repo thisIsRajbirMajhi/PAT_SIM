@@ -446,6 +446,32 @@ def _safe_float(v, default=0.0):
         return default
 
 
+def _compute_in_fov(source, gt):
+    """Robust in-FOV flag.
+
+    Handles NumPy arrays / lists for `gt.world_pos` without triggering the
+    ambiguous-truth-value error inside `... not in (None, (0, 0))`. Returns
+    None when `gt` or `world_pos` is missing/zero, or the projection fails.
+    """
+    if gt is None:
+        return None
+    wp = getattr(gt, "world_pos", None)
+    if wp is None:
+        return None
+    try:
+        is_zero = (len(wp) == 2
+                   and bool(wp[0] == 0)
+                   and bool(wp[1] == 0))
+    except (TypeError, IndexError, ValueError):
+        is_zero = False
+    if is_zero:
+        return None
+    try:
+        return source.camera.world_to_image(wp) is not None
+    except Exception:
+        return None
+
+
 def _sanitize_result(r):
     """Replace NaN/Inf and clamp obviously-bad metric fields."""
     for k, d in (("lock_pct", 0.0), ("rmse", 0.0), ("p95", 0.0),
@@ -753,11 +779,7 @@ def run_tracking_case(case_id, name, desc, cfg, frames, seed,
                 timed_out = True
                 break
             frame, gt = source.read()
-            try:
-                iv = (source.camera.world_to_image(gt.world_pos) is not None
-                      if gt and getattr(gt, "world_pos", None) not in (None, (0, 0)) else None)
-            except Exception:
-                iv = None
+            iv = _compute_in_fov(source, gt)
             try:
                 lim = bool(source.camera.is_at_limit(
                     getattr(pipe.controller, "prev_pan_rate", 0.0),
@@ -928,12 +950,7 @@ def run_robustness(rkey, seed):
                     except Exception:
                         pass
                 frame, gt = source.read()
-                try:
-                    iv = (source.camera.world_to_image(gt.world_pos) is not None
-                          if gt and getattr(gt, "world_pos", None) not in (None, (0, 0))
-                          else None)
-                except Exception:
-                    iv = None
+                iv = _compute_in_fov(source, gt)
                 t0 = time.perf_counter()
                 detection, estimate, cmd = pipe.step_frame(frame, dt=dt_ctrl, in_fov=iv)
                 proc_ms = (time.perf_counter() - t0) * 1000.0
@@ -1097,7 +1114,6 @@ def run_robustness(rkey, seed):
                         np.zeros((0, 0), dtype=np.uint8)):
                 try:
                     d, _e, _c = pipe.step_frame(bad)
-                    # must return something sensible
                     if d is None:
                         ok = False
                 except Exception:
@@ -1154,16 +1170,6 @@ def run_robustness(rkey, seed):
 # ---------------------------------------------------------------------------
 # Suite construction.
 # ---------------------------------------------------------------------------
-
-def _defs_by_kind(kind):
-    if kind == "X":
-        return X_DEFS
-    if kind == "E":
-        return E_DEFS
-    if kind == "R":
-        return R_DEFS
-    return []
-
 
 def _def_tags(defn):
     return set(defn.get("tags", []))
@@ -1242,6 +1248,11 @@ def _decorate_result(r, defn):
     return r
 
 
+def _resolve_frames(spec_frames, default_frames):
+    """Explicit None means 'use default'; explicit 0 (or other int) is respected."""
+    return default_frames if spec_frames is None else spec_frames
+
+
 def _worker(spec):
     _apply_spec_winner(spec)
     kind = spec["kind"]
@@ -1250,7 +1261,7 @@ def _worker(spec):
     if kind == "X":
         xd = next(d for d in X_DEFS if d["key"] == spec["xkey"])
         cfg = build_case_config(xd, spec["seed"])
-        frames = spec.get("frames") or xd["frames"]
+        frames = _resolve_frames(spec.get("frames"), xd["frames"])
         r = run_tracking_case(f'{xd["key"]}-s{spec["seed"]}',
                               f'{xd["name"]}@s{spec["seed"]}',
                               xd["desc"], cfg, frames, spec["seed"],
@@ -1260,7 +1271,7 @@ def _worker(spec):
     if kind == "E":
         ed = next(d for d in E_DEFS if d["key"] == spec["xkey"])
         cfg = build_edge_config(ed, spec["seed"])
-        frames = spec.get("frames") or ed["frames"]
+        frames = _resolve_frames(spec.get("frames"), ed["frames"])
         r = run_tracking_case(ed["key"], ed["name"], ed["desc"], cfg, frames,
                               spec["seed"], ed["intermittent"], cue=cue,
                               bkey=ed["key"], timeout_s=timeout_s)
@@ -1276,7 +1287,6 @@ def _worker(spec):
 
 def _family_of(case):
     base = case.split("-s")[0].split("@")[0]
-    # X1..X14 / E1..E26 / R1..R12 -> letter + digits
     i = 0
     while i < len(base) and base[i].isalpha():
         i += 1
@@ -1332,7 +1342,6 @@ def print_family_summary(results):
         d = fam[key]
         ml = float(np.mean(d["locks"])) if d["locks"] else 0.0
         wr = max(d["rmses"]) if d["rmses"] else 0.0
-        # merge tags from results in this family
         tags = set()
         for r in results:
             if _family_of(r["case"]) == key:
@@ -1407,14 +1416,12 @@ def main():
         _show(_filter_defs(R_DEFS, tags, severities), "Robustness:")
         return 0
 
-    full = args.extreme or args.gauntlet or args.full or (not args.scenario and not args.fuzz)
     if args.scenario:
         specs = build_suite(args.seed, 0, args.scenario, args.frames, tags, severities)
     elif args.fuzz:
         specs = build_suite(args.seed, args.fuzz, None, args.frames, tags, severities)
-    elif full:
-        specs = build_suite(args.seed, 0, None, args.frames, tags, severities)
     else:
+        # --extreme / --gauntlet / --full / default: full suite
         specs = build_suite(args.seed, 0, None, args.frames, tags, severities)
 
     for s in specs:
@@ -1452,7 +1459,7 @@ def main():
             elif s["kind"] == "X":
                 xd = next(d for d in X_DEFS if d["key"] == s["xkey"])
                 cfg = build_case_config(xd, s["seed"])
-                frames = s.get("frames") or xd["frames"]
+                frames = _resolve_frames(s.get("frames"), xd["frames"])
                 r = run_tracking_case(f'{xd["key"]}-s{s["seed"]}',
                                       f'{xd["name"]}@s{s["seed"]}',
                                       xd["desc"], cfg, frames, s["seed"],
@@ -1462,7 +1469,7 @@ def main():
             else:
                 ed = next(d for d in E_DEFS if d["key"] == s["xkey"])
                 cfg = build_edge_config(ed, s["seed"])
-                frames = s.get("frames") or ed["frames"]
+                frames = _resolve_frames(s.get("frames"), ed["frames"])
                 r = run_tracking_case(ed["key"], ed["name"], ed["desc"], cfg, frames,
                                       s["seed"], ed["intermittent"], cue=args.cue,
                                       bkey=ed["key"], timeout_s=args.timeout)
@@ -1474,7 +1481,7 @@ def main():
                     if s["kind"] == "X":
                         xd = next(d for d in X_DEFS if d["key"] == s["xkey"])
                         cfg = build_case_config(xd, s["seed"])
-                        frames = s.get("frames") or xd["frames"]
+                        frames = _resolve_frames(s.get("frames"), xd["frames"])
                         r = _decorate_result(
                             run_tracking_case(f'{xd["key"]}-s{s["seed"]}',
                                               f'{xd["name"]}@s{s["seed"]}',
@@ -1485,7 +1492,7 @@ def main():
                     elif s["kind"] == "E":
                         ed = next(d for d in E_DEFS if d["key"] == s["xkey"])
                         cfg = build_edge_config(ed, s["seed"])
-                        frames = s.get("frames") or ed["frames"]
+                        frames = _resolve_frames(s.get("frames"), ed["frames"])
                         r = _decorate_result(
                             run_tracking_case(ed["key"], ed["name"], ed["desc"],
                                               cfg, frames, s["seed"], ed["intermittent"],
@@ -1534,9 +1541,16 @@ def main():
                     "tags_filter": tags, "severity_filter": severities},
     }
     tmp = auto_json + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(payload, f, indent=2)
-    os.replace(tmp, auto_json)
+    try:
+        with open(tmp, "w") as f:
+            json.dump(payload, f, indent=2, allow_nan=False)
+        os.replace(tmp, auto_json)
+    except Exception as ex:
+        print(R.c(f"warning: failed to write {auto_json}: {ex}", R.C.B_YELLOW))
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
     # --- enriched report ---
     R.report(results, family, payload["summary"], prev_payload, runs_dir="runs",
@@ -1598,7 +1612,7 @@ def main():
 
     if args.json and args.json != auto_json:
         with open(args.json, "w") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(payload, f, indent=2, allow_nan=False)
         print(f"JSON -> {args.json}")
     if args.md and args.md != auto_md:
         with open(args.md, "w") as f:
