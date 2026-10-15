@@ -159,3 +159,31 @@ def test_main_bad_json_config_exits_friendly(tmp_path, monkeypatch, capsys):
     assert rc == 2
     out = capsys.readouterr().out
     assert str(p) in out
+
+
+def test_verdict_zero_losses_passes_losses_gate():
+    import headless
+    summary = {
+        "lock_retention_pct": 58.1,
+        "rmse_px": 0.69,
+        "first_lock_frame": 377,
+        "loss_count": 0,
+        "acquisition_count": 1,
+        "valid_detection_pct": 58.6,
+    }
+    v, reason = headless.verdict(summary, False, "X1")
+    assert v == "STRICT-PASS", reason
+    assert reason.startswith("beat bench")
+
+
+def test_verdict_missing_loss_count_stays_pessimistic():
+    import headless
+    summary = {
+        "lock_retention_pct": 58.1,
+        "rmse_px": 0.69,
+        "first_lock_frame": 377,
+        "acquisition_count": 1,
+        "valid_detection_pct": 58.6,
+    }
+    v, reason = headless.verdict(summary, False, "X1")
+    assert v == "FAIL" and "losses 99>2" in reason
