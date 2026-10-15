@@ -26,6 +26,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tests"))
 
 from pat_common.config.defaults import DEFAULT_CONFIG
 from pat_common.config.loader import deep_merge

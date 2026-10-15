@@ -339,7 +339,7 @@ def write_repro_scripts(results, stamp, runs_dir="runs"):
         key = r.get("bkey") or r["case"].split("-")[0]
         sd  = r["seed"]
         # try scenario-name lookup; fall back to key (works for X/E/R)
-        cmd = f"python headless.py --scenario {key} --seed {sd}"
+        cmd = f"python tests/headless.py --scenario {key} --seed {sd}"
         sh.append(f'echo "== {r["case"]} =="; {cmd} || true')
         ps.append(f'Write-Host "== {r["case"]} =="; {cmd}')
     with open(sh_path, "w") as f:
