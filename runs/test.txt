@@ -1,0 +1,111 @@
+(.venv) PS C:\Users\mrajb\OneDrive\Desktop\PAT_SIM\tests> python.exe headless.py --extreme --workers 4  
+Suite: 80 cases | tags=ALL | severity=ALL
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║ TL;DR: 49/80 passed (61.2%) in 236.4s                                    ║
+║ ✓ 39 STRICT   ~ 10 INTERMITTENT   ✗ 31 FAIL   ! 0 ERROR                 ║
+║ Best : X7-s99         lock  99.3%  rmse 293.78                           ║
+║ Worst: X2-s99         lock   0.0%  rmse  0.00                            ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+=== Severity breakdown ===
+KEY                 TOT   PASS   INT  FAIL   ERR   PASS%
+--------------------------------------------------------
+CORE                 16     13     0     3     0   81.2%
+EXPECTED-HARD         4      3     0     1     0   75.0%
+EXTREME              21      5     6    10     0   52.4%
+HARD                 39     18     4    17     0   56.4%
+
+=== Primary-tag breakdown ===
+KEY                 TOT   PASS   INT  FAIL   ERR   PASS%
+--------------------------------------------------------
+ambiguity             5      3     1     1     0   80.0%
+atmosphere            7      4     0     3     0   57.1%
+clutter              11      8     0     3     0   72.7%
+control               3      3     0     0     0  100.0%
+detection            14      4     5     5     0   64.3%
+determinism           3      3     0     0     0  100.0%
+motion               18      3     1    14     0   22.2%
+noise                 7      2     3     2     0   71.4%
+robustness            5      5     0     0     0  100.0%
+sensor                6      3     0     3     0   50.0%
+throughput            1      1     0     0     0  100.0%
+
+=== Leaderboards ===
+TOP 5 (best lock%):
+  X7-s99         lock  99.3%  rmse 293.78  p95 334.96  1st     4
+  X9-s42         lock  99.3%  rmse  0.00  p95  0.00  1st     4
+  X9-s7          lock  99.3%  rmse  0.00  p95  0.00  1st     4
+  E6             lock  99.3%  rmse 286.04  p95 331.51  1st     4
+  E16            lock  99.3%  rmse  0.00  p95  0.00  1st     4
+BOTTOM 5 (worst lock%):
+  X2-s99         lock   0.0%  rmse  0.00  p95  0.00  1st  None
+  X8-s99         lock   0.0%  rmse  0.00  p95  0.00  1st  None
+  R2             lock   0.0%  rmse  0.00  p95  0.00  1st  None
+  R5             lock   0.0%  rmse  0.00  p95  0.00  1st  None
+  R8             lock   0.0%  rmse  0.00  p95  0.00  1st  None
+
+=== Failure causes ===
+  lock        9 case(s): X2-s7, X2-s99, X5-s42, X5-s7, X5-s99, X8-s99, E8, E22, E25
+  losses      16 case(s): X3-s42, X3-s7, X4-s42, X4-s7, X4-s99, X7-s42, X11-s42, X11-s7, X11-s99, X13-s42, X13-s7, X13-s99, E7, E13, E14, E19
+  rmse        6 case(s): X7-s7, X7-s99, X8-s7, E4, E15, E18
+
+
+=== Family aggregate ===
+FAM   TOTAL  STRICT  INT   FAIL  ERR   MEAN_LOCK  WORST_RMSE  TAGS
+----------------------------------------------------------------------------------------------------
+E1    1      1       0     0     0     83.5       0.94        detection
+E2    1      1       0     0     0     68.5       0.76        control
+E3    1      1       0     0     0     23.7       2.64        detection,motion
+E4    1      0       0     1     0     38.8       173.22      ambiguity
+E5    1      0       1     0     0     22.0       0.82        detection
+E6    1      1       0     0     0     99.3       286.04      atmosphere
+E7    1      0       0     1     0     73.2       0.00        control,motion
+E8    1      0       0     1     0     24.8       0.76        sensor,throughput
+E9    1      1       0     0     0     66.8       0.73        sensor
+E10   1      1       0     0     0     81.8       0.82        sensor
+E11   1      1       0     0     0     37.0       1.42        atmosphere
+E12   1      0       1     0     0     95.8       290.09      ambiguity,motion
+E13   1      0       0     1     0     12.2       0.00        control,motion
+E14   1      0       0     1     0     5.7        1.21        control,detection
+E15   1      0       0     1     0     0.2        322.87      clutter,detection
+E16   1      1       0     0     0     99.3       0.00        atmosphere,detection
+E17   1      0       1     0     0     47.3       338.74      ambiguity,detection
+E18   1      0       0     1     0     64.8       39.06       sensor
+E19   1      0       0     1     0     54.3       0.00        control,motion
+E20   1      1       0     0     0     66.8       0.82        detection,noise
+E21   1      1       0     0     0     92.8       0.66        sensor,throughput
+E22   1      0       0     1     0     1.0        1.47        motion,sensor,throughput
+E23   1      1       0     0     0     80.5       2.06        ambiguity,motion
+E24   1      1       0     0     0     74.8       0.84        ambiguity,motion
+E25   1      0       0     1     0     28.3       1.22        detection
+E26   1      1       0     0     0     78.5       1.00        clutter,detection,noise
+R1    1      1       0     0     0     64.2       5.30        atmosphere,robustness
+R2    1      1       0     0     0     0.0        0.00        determinism,robustness
+R3    1      1       0     0     0     0.0        0.00        robustness
+R4    1      1       0     0     0     0.0        0.00        control,robustness
+R5    1      1       0     0     0     0.0        0.00        robustness,throughput
+R6    1      1       0     0     0     68.6       0.68        robustness
+R7    1      1       0     0     0     0.0        0.00        determinism,robustness
+R8    1      1       0     0     0     0.0        0.00        control,robustness
+R9    1      1       0     0     0     0.0        0.00        determinism,robustness
+R10   1      1       0     0     0     0.0        0.00        determinism,robustness
+R11   1      1       0     0     0     0.0        0.00        robustness
+R12   1      1       0     0     0     0.0        0.00        determinism,robustness
+X1    3      3       0     0     0     58.3       0.80        detection
+X2    3      1       0     2     0     18.8       0.82        noise,sensor
+X3    3      1       0     2     0     51.4       10.39       control,motion
+X4    3      0       0     3     0     52.2       0.00        control,motion
+X5    3      0       0     3     0     26.1       1.28        clutter,detection
+X6    3      0       3     0     0     27.0       1.14        control,detection
+X7    3      0       0     3     0     93.6       293.78      atmosphere,motion
+X8    3      1       0     2     0     42.9       22.33       clutter,control
+X9    3      3       0     0     0     73.4       0.80        ambiguity,clutter
+X10   3      0       3     0     0     6.3        107.71      atmosphere,detection,motion,noise
+X11   3      0       0     3     0     52.5       9.82        detection,motion,sensor
+X12   3      2       1     0     0     44.1       119.39      ambiguity,clutter
+X13   3      0       0     3     0     55.3       0.00        control,motion
+X14   3      3       0     0     0     79.8       0.87        clutter,control,motion
+
+Suite: 80 cases in 236.4s | STRICT 39 INTERMITTENT 10 FAIL 31 ERROR 0
+FINAL VERDICT: FAIL - 31 case(s) below benchmark
