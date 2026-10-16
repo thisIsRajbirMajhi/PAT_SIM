@@ -1,0 +1,31 @@
+{
+  "tracker": {
+    "gate_sigma": 5.143286673330984,
+    "lost_timeout_frames": 14,
+    "reacq_timeout_frames": 45
+  },
+  "controller": {
+    "integral_limit": 15.546355010797154,
+    "feedforward_gain": 1.9950815215964723,
+    "search_angle_step": 0.8197866261279225,
+    "search_radius_step": 0.32708631847273056,
+    "search_radius_max": 6.236230696115206,
+    "search_rate_scale": 1.1322060042411306,
+    "spiral_phase_s": 6.775423836998101,
+    "raster_pan_scale": 0.8253166350207176,
+    "raster_tilt_scale": 0.9359804943320855,
+    "stare_rate_scale": 0.704451757587944,
+    "intercept_gain": 3.9432712808774193,
+    "intercept_lead_s": 0.0938643100262675,
+    "unc_scale": 1.6317543314911227,
+    "unc_max_boost": 3.5809442155928597,
+    "fast_vel_deg_s": 3.0239818085561123,
+    "give_up_frames": 1248
+  },
+  "camera": {
+    "initial_position": "user-defined",
+    "initial_pan": -3.526454910393975,
+    "initial_tilt": 7.524967153948801,
+    "update_interval_hz": 50.359828418156894
+  }
+}

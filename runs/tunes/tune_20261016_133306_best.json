@@ -1,0 +1,182 @@
+{
+  "overrides": {
+    "detector": {
+      "threshold_k": 4.02945398357425,
+      "min_area": 16,
+      "max_area": 1043
+    },
+    "tracker": {
+      "process_noise": 3.5467065956722528,
+      "meas_noise": 9.029500869129953,
+      "gate_sigma": 6.583130366531518,
+      "lost_timeout_frames": 24,
+      "reacq_timeout_frames": 42
+    },
+    "controller": {
+      "kp_pan": 1.8434734388666998,
+      "kp_tilt": 4.239543216331588,
+      "ki": 0.3265052744722915,
+      "kd": 1.5382722240426179,
+      "deadzone_px": 4.399792256908431,
+      "integral_limit": 15.475383811801034,
+      "feedforward_gain": 0.620844963899215,
+      "search_angle_step": 0.3088757566251832,
+      "search_radius_step": 0.22016579533576192,
+      "search_radius_max": 6.884782148051689,
+      "search_rate_scale": 1.008909714614272,
+      "spiral_phase_s": 4.8430326286575465,
+      "raster_pan_scale": 0.9628437027589861,
+      "raster_tilt_scale": 0.7260735751035556,
+      "stare_rate_scale": 0.1672385014910221,
+      "intercept_gain": 3.9156898088805203,
+      "intercept_lead_s": 0.013063271580729273,
+      "unc_scale": 1.5280924333612143,
+      "unc_max_boost": 3.7186279232936013,
+      "fast_vel_deg_s": 0.9961396471348994,
+      "give_up_frames": 650
+    },
+    "camera": {
+      "initial_position": "user-defined",
+      "initial_pan": -6.093261864873546,
+      "initial_tilt": 2.6578473385359715,
+      "update_interval_hz": 40.37854618733849
+    }
+  },
+  "resolved_config": {
+    "world": {
+      "width": 2000,
+      "height": 2000,
+      "background": 18
+    },
+    "camera": {
+      "type": "monochrome",
+      "resolution": [
+        640,
+        480
+      ],
+      "fov_deg": [
+        4.0,
+        3.0
+      ],
+      "fps": 30.0,
+      "initial_position": "user-defined",
+      "initial_pan": -6.093261864873546,
+      "initial_tilt": 2.6578473385359715,
+      "max_pan_speed": 5.0,
+      "max_tilt_speed": 5.0,
+      "update_interval_hz": 40.37854618733849,
+      "jitter_px": 0.0
+    },
+    "target": {
+      "type": "beacon_spot",
+      "count": 1,
+      "shape": "square",
+      "custom_polygon": null,
+      "size": 10,
+      "initial_pos": null,
+      "initial_mode": "random",
+      "trajectory": "circular",
+      "trajectories": null,
+      "distractor_trajectory": null,
+      "speeds": null,
+      "speed_px_per_frame": 2.8,
+      "blink_rate_hz": 0.0,
+      "visibility_schedule": null
+    },
+    "platform": {
+      "type": "linear",
+      "speed_px_per_frame": 0.0,
+      "amplitude": 0.0
+    },
+    "noise": {
+      "gaussian_std": 0.0,
+      "salt_pepper_prob": 0.0,
+      "poisson": false,
+      "gaussian_enabled": false,
+      "salt_pepper_enabled": false
+    },
+    "atmosphere": {
+      "type": "clear",
+      "strength": 0.0
+    },
+    "environment": {
+      "gradient_enabled": false,
+      "gradient_type": "linear",
+      "gradient_top": 22,
+      "gradient_bottom": 38,
+      "gradient_angle": 90,
+      "texture_enabled": true,
+      "texture_strength": 5,
+      "stars_enabled": false,
+      "stars_density": 0.0007,
+      "stars_brightness": 185,
+      "stars_min_mag": 90,
+      "stars_max_mag": 255,
+      "stars_twinkle": false,
+      "stars_twinkle_amount": 6,
+      "stars_seed": 1337,
+      "stars_max_count": 12000,
+      "vignetting_enabled": false,
+      "vignetting_strength": 0.42,
+      "vignetting_radius": 0.72,
+      "vignetting_falloff": 2.0,
+      "vignetting_center_x": 0.5,
+      "vignetting_center_y": 0.5,
+      "brightness_gain": 1.0,
+      "brightness_offset": 0
+    },
+    "detector": {
+      "threshold_k": 4.02945398357425,
+      "min_area": 16,
+      "max_area": 1043,
+      "blur_ksize": 3,
+      "adaptive_block": 51,
+      "adaptive_C": -5
+    },
+    "tracker": {
+      "process_noise": 3.5467065956722528,
+      "meas_noise": 9.029500869129953,
+      "gate_sigma": 6.583130366531518,
+      "lost_timeout_frames": 24,
+      "reacq_timeout_frames": 42
+    },
+    "controller": {
+      "kp_pan": 1.8434734388666998,
+      "kp_tilt": 4.239543216331588,
+      "ki": 0.3265052744722915,
+      "kd": 1.5382722240426179,
+      "deadzone_px": 4.399792256908431,
+      "integral_limit": 15.475383811801034,
+      "feedforward_gain": 0.620844963899215,
+      "search_angle_step": 0.3088757566251832,
+      "search_radius_step": 0.22016579533576192,
+      "search_radius_max": 6.884782148051689,
+      "search_rate_scale": 1.008909714614272,
+      "spiral_phase_s": 4.8430326286575465,
+      "raster_pan_scale": 0.9628437027589861,
+      "raster_tilt_scale": 0.7260735751035556,
+      "stare_rate_scale": 0.1672385014910221,
+      "intercept_gain": 3.9156898088805203,
+      "intercept_lead_s": 0.013063271580729273,
+      "unc_scale": 1.5280924333612143,
+      "unc_max_boost": 3.7186279232936013,
+      "fast_vel_deg_s": 0.9961396471348994,
+      "give_up_frames": 650
+    },
+    "experiment": {
+      "duration_s": 30.0,
+      "seed": 42,
+      "input_mode": "SYNTHETIC",
+      "video_path": "",
+      "video_annotations_path": "",
+      "video_native_fps": false
+    }
+  },
+  "score": {
+    "value": 5237.9,
+    "trial": 89,
+    "round": 0,
+    "stage": null
+  },
+  "stamp": "20261016_133306"
+}
